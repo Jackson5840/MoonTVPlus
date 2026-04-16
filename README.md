@@ -1,4 +1,4 @@
-# MoonStarTV / StarsLy小破站 Fork
+# Fork 说明
 
 本仓库是基于上游项目二次开发的自用分支。
 
@@ -34,9 +34,8 @@
 
 下面这些内容是**当前这个仓库**相对上游重点做过的改动。
 
-### 1. 品牌和部署方式调整
+### 1. 部署方式调整
 
-- 默认站点名称改为 **`StarsLy小破站`**
 - `docker-compose.yml` 已改成可直接使用：
 
 ```bash
@@ -285,12 +284,6 @@ docker compose up -d --build
 ## 本 Fork 额外关注的环境变量
 
 除了上游原本的变量外，这个 Fork 额外值得注意的有：
-
-### 站点名称
-
-```env
-NEXT_PUBLIC_SITE_NAME=StarsLy小破站
-```
 
 ### 观影室
 
