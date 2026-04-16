@@ -1,10 +1,10 @@
 services:
   - type: web
-    name: moontvplus
+    name: moonstartv
     runtime: image
     plan: free
     image:
-      url: ghcr.io/mtvpls/moontvplus:latest
+      url: ghcr.io/jackson5840/moonstartv:latest
     envVars:
       - key: USERNAME
         sync: false
