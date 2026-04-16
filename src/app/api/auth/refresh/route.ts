@@ -1,7 +1,14 @@
 /* eslint-disable no-console */
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getAuthInfoFromCookie, parseAuthInfo } from '@/lib/auth';
+import {
+  getAuthCookieOptions,
+  getAuthInfoFromCookie,
+  isPersistentAuthSession,
+  parseAuthInfo,
+  toClientAuthInfo,
+  verifyAuthSignature,
+} from '@/lib/auth';
 import { refreshAccessToken } from '@/lib/middleware-auth';
 import { TOKEN_CONFIG } from '@/lib/refresh-token';
 
@@ -19,11 +26,9 @@ function buildRefreshResponse(authToken?: string | null) {
   const body: Record<string, unknown> = { ok: true };
 
   if (authToken) {
-    body.token = authToken;
     const authInfo = parseAuthInfo(authToken);
     if (authInfo) {
-      const { password, ...rest } = authInfo;
-      body.auth = rest;
+      body.auth = toClientAuthInfo(authInfo);
     }
   }
 
@@ -38,7 +43,22 @@ export async function POST(request: NextRequest) {
   }
 
   if (STORAGE_TYPE === 'localstorage') {
-    if (!authInfo.password || authInfo.password !== process.env.PASSWORD) {
+    const hasLegacyPassword =
+      !!authInfo.password && authInfo.password === process.env.PASSWORD;
+    const hasSignedSession =
+      !!authInfo.username &&
+      !!authInfo.role &&
+      !!authInfo.signature &&
+      !!authInfo.timestamp &&
+      await verifyAuthSignature(
+        authInfo.username,
+        authInfo.role,
+        authInfo.timestamp,
+        authInfo.signature,
+        process.env.PASSWORD || ''
+      );
+
+    if (!hasLegacyPassword && !hasSignedSession) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -47,16 +67,22 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const response = buildRefreshResponse(authCookie.value);
-    const expires = new Date();
-    expires.setDate(expires.getDate() + 60);
-    response.cookies.set('auth', authCookie.value, {
-      path: '/',
-      expires,
-      sameSite: 'lax',
-      httpOnly: false,
-      secure: false,
-    });
+    let authCookieValue = authCookie.value;
+    if (hasLegacyPassword) {
+      const { password: _password, ...sanitizedAuthInfo } = authInfo;
+      authCookieValue = encodeURIComponent(JSON.stringify(sanitizedAuthInfo));
+    }
+
+    const response = buildRefreshResponse(authCookieValue);
+    const persistent = isPersistentAuthSession(authInfo);
+    const expires = persistent
+      ? new Date(Date.now() + TOKEN_CONFIG.REFRESH_TOKEN_AGE)
+      : undefined;
+    response.cookies.set(
+      'auth',
+      authCookieValue,
+      getAuthCookieOptions(request, { persistent, expires })
+    );
     return response;
   }
 
@@ -96,13 +122,12 @@ export async function POST(request: NextRequest) {
   }
 
   const response = buildRefreshResponse(newAuthData);
-  const expires = new Date(authInfo.refreshExpires);
-  response.cookies.set('auth', newAuthData, {
-    path: '/',
-    expires,
-    sameSite: 'lax',
-    httpOnly: false,
-    secure: false,
-  });
+  const persistent = isPersistentAuthSession(authInfo);
+  const expires = persistent ? new Date(authInfo.refreshExpires) : undefined;
+  response.cookies.set(
+    'auth',
+    newAuthData,
+    getAuthCookieOptions(request, { persistent, expires })
+  );
   return response;
 }

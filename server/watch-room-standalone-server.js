@@ -3,9 +3,9 @@
 // 独立的观影室服务器
 // 使用方式: node watch-room-standalone-server.js --port 3001 --auth YOUR_SECRET_KEY
 
-import { createServer } from 'http';
-import { Server } from 'socket.io';
-import { WatchRoomServer } from '../lib/watch-room-server';
+const { createServer } = require('http');
+const { Server } = require('socket.io');
+const { WatchRoomServer } = require('./watch-room-server');
 
 const args = process.argv.slice(2);
 const port = parseInt(args[args.indexOf('--port') + 1] || '3001');

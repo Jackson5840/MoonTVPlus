@@ -27,7 +27,7 @@ generateManifest();
 require('./server.js');
 
 // 每 1 秒轮询一次，直到请求成功
-const TARGET_URL = `http://${process.env.HOSTNAME || 'localhost'}:${process.env.PORT || 3000
+const TARGET_URL = `http://${process.env.HOSTNAME || 'localhost'}:${process.env.PORT || 3009
   }/login`;
 
 const intervalId = setInterval(() => {
@@ -59,7 +59,7 @@ const intervalId = setInterval(() => {
 // 执行 cron 任务的函数
 function executeCronJob() {
   const cronPassword = process.env.CRON_PASSWORD || 'mtvpls';
-  const cronUrl = `http://${process.env.HOSTNAME || 'localhost'}:${process.env.PORT || 3000
+  const cronUrl = `http://${process.env.HOSTNAME || 'localhost'}:${process.env.PORT || 3009
     }/api/cron/${cronPassword}`;
 
   console.log(`Executing cron job: ${cronUrl}`);

@@ -384,6 +384,11 @@ dockge/komodo 等 docker compose UI 也有自动更新功能
 | ---------------------------------------- | ------------------------------------------------------------ | --------------------------- | ------------------------------------------------------------ |
 | USERNAME                                 | 站长账号                                                     | 任意字符串                  | 无默认，必填字段                                             |
 | PASSWORD                                 | 站长密码                                                     | 任意字符串                  | 无默认，必填字段                                             |
+| LOGIN_RATE_LIMIT_WINDOW_MINUTES          | 登录失败统计窗口时长（分钟）                                 | 正整数                      | 10                                                           |
+| LOGIN_RATE_LIMIT_BLOCK_MINUTES           | 达到阈值后的登录封禁时长（分钟）                             | 正整数                      | 15                                                           |
+| LOGIN_RATE_LIMIT_MAX_FAILURES_PER_IP     | 同一 IP 在统计窗口内允许的最大失败次数                       | 正整数                      | 20                                                           |
+| LOGIN_RATE_LIMIT_MAX_FAILURES_PER_IP_USERNAME | 同一 IP + 用户名 在统计窗口内允许的最大失败次数           | 正整数                      | 5                                                            |
+| LOGIN_RATE_LIMIT_PERMANENT_BAN_PER_IP    | 同一 IP 达到失败阈值后是否永久封禁登录                       | true/false                  | false                                                        |
 | CRON_PASSWORD                            | 定时任务 API 访问密码（用于保护 /api/cron 端点）             | 任意字符串                  | mtvpls                                                       |
 | CRON_WAIT_FOR_COMPLETION                 | 定时任务接口是否等待任务完全结束后再返回响应（true 时返回 200，false 时立即返回 202） | true/false                  | false                                                        |
 | CRON_USER_BATCH_SIZE                     | 定时任务用户批处理大小（控制并发处理的用户数量，影响播放记录和收藏更新任务的并发性能） | 正整数                      | 3                                                            |

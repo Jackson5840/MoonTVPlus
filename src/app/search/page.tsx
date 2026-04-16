@@ -22,7 +22,6 @@ import React, {
   useState,
 } from 'react';
 
-import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import {
   addSearchHistory,
   clearSearchHistory,
@@ -34,6 +33,7 @@ import { SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
 
 import AcgSearch from '@/components/AcgSearch';
+import { useAuth } from '@/components/AuthProvider';
 import CapsuleSwitch from '@/components/CapsuleSwitch';
 import ImageViewer from '@/components/ImageViewer';
 import PageLayout from '@/components/PageLayout';
@@ -47,6 +47,7 @@ import VideoCard, { VideoCardHandle } from '@/components/VideoCard';
 import VirtualScrollableGrid from '@/components/VirtualScrollableGrid';
 
 function SearchPageClient() {
+  const { authInfo } = useAuth();
   // 搜索历史
   const [searchHistory, setSearchHistory] = useState<string[]>([]);
   // 返回顶部按钮显示状态
@@ -971,10 +972,6 @@ function SearchPageClient() {
     // 无搜索参数时聚焦搜索框
     !searchParams.get('q') && document.getElementById('searchInput')?.focus();
 
-    // 获取用户权限
-    const authInfo = getAuthInfoFromBrowserCookie();
-    setUserRole(authInfo?.role || null);
-
     // 初始化繁体转简体转换器
     if (typeof window !== 'undefined') {
       import('opencc-js')
@@ -1063,6 +1060,10 @@ function SearchPageClient() {
       document.body.removeEventListener('scroll', handleScroll);
     };
   }, []);
+
+  useEffect(() => {
+    setUserRole(authInfo?.role || null);
+  }, [authInfo?.role]);
 
   useEffect(() => {
     // 等待转换器初始化完成

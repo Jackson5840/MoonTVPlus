@@ -49,9 +49,9 @@ import { memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { createPortal } from 'react-dom';
 
 import { AdminConfig, AdminConfigResult } from '@/lib/admin.types';
-import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 
 import AnimeSubscriptionComponent from '@/components/AnimeSubscriptionComponent';
+import { useAuth } from '@/components/AuthProvider';
 import CorrectDialog from '@/components/CorrectDialog';
 import DataMigration from '@/components/DataMigration';
 import PageLayout from '@/components/PageLayout';
@@ -539,8 +539,10 @@ const UserConfig = ({ config, role, refreshConfig, usersV2, userPage, userTotalP
   const [showDeleteUserModal, setShowDeleteUserModal] = useState(false);
   const [deletingUser, setDeletingUser] = useState<string | null>(null);
 
+  const { authInfo } = useAuth();
+
   // 当前登录用户名
-  const currentUsername = getAuthInfoFromBrowserCookie()?.username || null;
+  const currentUsername = authInfo?.username || null;
 
   // 判断是否有旧版用户数据需要迁移
   const hasOldUserData = config?.UserConfig?.Users?.filter((u: any) => u.role !== 'owner').length ?? 0 > 0;
@@ -11473,7 +11475,7 @@ const AIConfigComponent = ({
               value={defaultMessageNoVideo}
               onChange={(e) => setDefaultMessageNoVideo(e.target.value)}
               rows={3}
-              placeholder='例如：你好！我是MoonTVPlus的AI影视助手。想看什么电影或剧集？需要推荐吗？'
+              placeholder='例如：你好！我是StarsLy小破站的AI影视助手。想看什么电影或剧集？需要推荐吗？'
               className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100'
             />
             <p className='mt-2 text-sm text-gray-600 dark:text-gray-400'>

@@ -1,5 +1,10 @@
 import { NextRequest } from 'next/server';
 
+import {
+  clearClientAuthState,
+  getClientAuthInfo,
+} from './client-auth';
+
 export type AuthInfo = {
   password?: string;
   username?: string;
@@ -9,7 +14,111 @@ export type AuthInfo = {
   tokenId?: string;
   refreshToken?: string;
   refreshExpires?: number;
+  persistent?: boolean;
 };
+
+type CookieRequest = Pick<NextRequest, 'headers' | 'nextUrl'>;
+
+export function shouldUseSecureCookies(request: CookieRequest): boolean {
+  const forwardedProto = request.headers.get('x-forwarded-proto');
+  if (forwardedProto) {
+    return forwardedProto.split(',')[0].trim() === 'https';
+  }
+
+  return request.nextUrl.protocol === 'https:';
+}
+
+export function getAuthCookieOptions(
+  request: CookieRequest,
+  options: {
+    persistent?: boolean;
+    expires?: Date;
+  } = {}
+) {
+  const cookieOptions = {
+    path: '/',
+    sameSite: 'lax' as const,
+    httpOnly: true,
+    secure: shouldUseSecureCookies(request),
+  };
+
+  if (options.persistent && options.expires) {
+    return {
+      ...cookieOptions,
+      expires: options.expires,
+    };
+  }
+
+  return cookieOptions;
+}
+
+export function getExpiredAuthCookieOptions(request: CookieRequest) {
+  return {
+    ...getAuthCookieOptions(request),
+    expires: new Date(0),
+  };
+}
+
+export function isPersistentAuthSession(
+  authInfo: AuthInfo | null | undefined
+): boolean {
+  return authInfo?.persistent !== false;
+}
+
+export function toClientAuthInfo(authInfo: AuthInfo | null | undefined) {
+  if (!authInfo?.username || !authInfo?.role) {
+    return null;
+  }
+
+  return {
+    username: authInfo.username,
+    role: authInfo.role,
+    timestamp: authInfo.timestamp,
+    refreshExpires: authInfo.refreshExpires,
+    persistent: authInfo.persistent,
+  };
+}
+
+export async function verifyAuthSignature(
+  username: string,
+  role: string,
+  timestamp: number,
+  signature: string,
+  secret: string
+): Promise<boolean> {
+  const encoder = new TextEncoder();
+  const keyData = encoder.encode(secret);
+  const dataToSign = JSON.stringify({
+    username,
+    role,
+    timestamp,
+  });
+  const messageData = encoder.encode(dataToSign);
+
+  try {
+    const key = await crypto.subtle.importKey(
+      'raw',
+      keyData,
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['verify']
+    );
+
+    const signatureBuffer = new Uint8Array(
+      signature.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) || []
+    );
+
+    return await crypto.subtle.verify(
+      'HMAC',
+      key,
+      signatureBuffer,
+      messageData
+    );
+  } catch (error) {
+    console.error('签名验证失败:', error);
+    return false;
+  }
+}
 
 function getAuthTokenFromHeader(value: string): string {
   const trimmed = value.trim();
@@ -80,50 +189,10 @@ export function getAuthInfoFromCookie(request: NextRequest): AuthInfo | null {
 
 // 从cookie获取认证信息 (客户端使用)
 export function getAuthInfoFromBrowserCookie(): AuthInfo | null {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-
-  try {
-    // 解析 document.cookie
-    const cookies = document.cookie.split(';').reduce((acc, cookie) => {
-      const trimmed = cookie.trim();
-      const firstEqualIndex = trimmed.indexOf('=');
-
-      if (firstEqualIndex > 0) {
-        const key = trimmed.substring(0, firstEqualIndex);
-        const value = trimmed.substring(firstEqualIndex + 1);
-        if (key && value) {
-          acc[key] = value;
-        }
-      }
-
-      return acc;
-    }, {} as Record<string, string>);
-
-    const authCookie = cookies['auth'];
-    if (!authCookie) {
-      return null;
-    }
-
-    return parseAuthInfo(authCookie);
-  } catch (error) {
-    return null;
-  }
+  return getClientAuthInfo() as AuthInfo | null;
 }
 
 // 清除浏览器中的认证cookie (客户端使用)
 export function clearAuthCookie(): void {
-  if (typeof window === 'undefined') {
-    return;
-  }
-
-  try {
-    // 清除 auth cookie，设置过期时间为过去
-    document.cookie = 'auth=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax';
-    // 如果有其他域名或路径的cookie，也尝试清除
-    document.cookie = 'auth=; path=/; domain=' + window.location.hostname + '; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax';
-  } catch (error) {
-    console.error('[Auth] Failed to clear cookie:', error);
-  }
+  clearClientAuthState();
 }

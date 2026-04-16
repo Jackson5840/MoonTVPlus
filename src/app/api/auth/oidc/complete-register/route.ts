@@ -1,6 +1,7 @@
 /* eslint-disable no-console,@typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from 'next/server';
 
+import { getAuthCookieOptions, shouldUseSecureCookies } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
 import { db } from '@/lib/db';
 import {
@@ -73,7 +74,7 @@ async function generateAuthCookie(
   role: 'owner' | 'admin' | 'user',
   deviceInfo: string
 ): Promise<string> {
-  const authData: any = { role };
+  const authData: any = { role, persistent: true };
 
   if (username && process.env.PASSWORD) {
     authData.username = username;
@@ -224,16 +225,20 @@ export async function POST(request: NextRequest) {
       const cookieValue = await generateAuthCookie(username, 'user', deviceInfo);
       const expires = new Date(Date.now() + TOKEN_CONFIG.REFRESH_TOKEN_AGE);
 
-      response.cookies.set('auth', cookieValue, {
-        path: '/',
-        expires,
-        sameSite: 'lax',
-        httpOnly: false,
-        secure: false,
-      });
+      response.cookies.set(
+        'auth',
+        cookieValue,
+        getAuthCookieOptions(request, { persistent: true, expires })
+      );
 
       // 清除OIDC session
-      response.cookies.delete('oidc_session');
+      response.cookies.set('oidc_session', '', {
+        path: '/',
+        expires: new Date(0),
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: shouldUseSecureCookies(request),
+      });
 
       return response;
     } catch (err) {

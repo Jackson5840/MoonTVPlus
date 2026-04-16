@@ -2,7 +2,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getAuthInfoFromCookie } from '@/lib/auth';
+import { getAuthInfoFromCookie, verifyAuthSignature } from '@/lib/auth';
 import { TOKEN_CONFIG } from '@/lib/refresh-token';
 
 export async function middleware(request: NextRequest) {
@@ -30,9 +30,29 @@ export async function middleware(request: NextRequest) {
 
   // localstorage模式：在middleware中完成验证
   if (storageType === 'localstorage') {
-    if (!authInfo.password || authInfo.password !== process.env.PASSWORD) {
+    const hasLegacyPassword =
+      !!authInfo.password && authInfo.password === process.env.PASSWORD;
+
+    if (hasLegacyPassword) {
+      return NextResponse.next();
+    }
+
+    if (!authInfo.username || !authInfo.role || !authInfo.signature || !authInfo.timestamp) {
       return handleAuthFailure(request, pathname);
     }
+
+    const isValidSignature = await verifyAuthSignature(
+      authInfo.username,
+      authInfo.role,
+      authInfo.timestamp,
+      authInfo.signature,
+      process.env.PASSWORD || ''
+    );
+
+    if (!isValidSignature) {
+      return handleAuthFailure(request, pathname);
+    }
+
     return NextResponse.next();
   }
 
@@ -72,7 +92,7 @@ export async function middleware(request: NextRequest) {
   }
 
   // Access Token 未过期，验证签名
-  const isValidSignature = await verifySignature(
+  const isValidSignature = await verifyAuthSignature(
     authInfo.username,
     authInfo.role,
     authInfo.timestamp,
@@ -87,53 +107,6 @@ export async function middleware(request: NextRequest) {
   // 签名验证通过
   // 注意：Token 续期由前端负责，Middleware 不再自动刷新
   return NextResponse.next();
-}
-
-// 验证签名
-async function verifySignature(
-  username: string,
-  role: string,
-  timestamp: number,
-  signature: string,
-  secret: string
-): Promise<boolean> {
-  const encoder = new TextEncoder();
-  const keyData = encoder.encode(secret);
-
-  // 构造与生成签名时相同的数据结构
-  const dataToSign = JSON.stringify({
-    username,
-    role,
-    timestamp
-  });
-  const messageData = encoder.encode(dataToSign);
-
-  try {
-    // 导入密钥
-    const key = await crypto.subtle.importKey(
-      'raw',
-      keyData,
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['verify']
-    );
-
-    // 将十六进制字符串转换为Uint8Array
-    const signatureBuffer = new Uint8Array(
-      signature.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) || []
-    );
-
-    // 验证签名
-    return await crypto.subtle.verify(
-      'HMAC',
-      key,
-      signatureBuffer,
-      messageData
-    );
-  } catch (error) {
-    console.error('签名验证失败:', error);
-    return false;
-  }
 }
 
 // 处理认证失败的情况
@@ -172,6 +145,6 @@ function shouldSkipAuth(pathname: string): boolean {
 // 配置middleware匹配规则
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|login|register|oidc-register|warning|api/login|api/register|api/logout|api/auth/oidc|api/auth/refresh|api/cron/|api/server-config|api/proxy-m3u8|api/cms-proxy|api/tvbox/subscribe|api/theme/css|api/openlist/cms-proxy|api/openlist/play|api/emby/cms-proxy|api/emby/play|api/emby/sources|tvbox/).*)',
+    '/((?!_next/static|_next/image|favicon.ico|login|register|oidc-register|warning|api/login|api/register|api/logout|api/me|api/auth/oidc|api/auth/refresh|api/cron/|api/server-config|api/proxy-m3u8|api/cms-proxy|api/tvbox/subscribe|api/theme/css|api/openlist/cms-proxy|api/openlist/play|api/emby/cms-proxy|api/emby/play|api/emby/sources|tvbox/).*)',
   ],
 };

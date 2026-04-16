@@ -1,0 +1,34 @@
+services:
+  startv:
+    build:
+      context: .
+    image: startv:latest
+    container_name: startv
+    restart: unless-stopped
+    ports:
+      - "3009:3009"
+    environment:
+      NEXT_PUBLIC_SITE_NAME: StarsLy小破站
+      USERNAME: admin
+      PASSWORD: Jjwojfnwi7HW#@f2
+      CRON_PASSWORD: CHANGE_ME_CRON_PASSWORD
+      NEXT_PUBLIC_STORAGE_TYPE: kvrocks
+      KVROCKS_URL: redis://startv-kvrocks:6666
+      WATCH_ROOM_ENABLED: "true"
+      WATCH_ROOM_SERVER_TYPE: internal
+      LOGIN_RATE_LIMIT_WINDOW_MINUTES: 10
+      LOGIN_RATE_LIMIT_MAX_FAILURES_PER_IP: 10
+      LOGIN_RATE_LIMIT_MAX_FAILURES_PER_IP_USERNAME: 10
+      LOGIN_RATE_LIMIT_PERMANENT_BAN_PER_IP: "true"
+    depends_on:
+      - startv-kvrocks
+
+  startv-kvrocks:
+    image: apache/kvrocks
+    container_name: startv-kvrocks
+    restart: unless-stopped
+    volumes:
+      - kvrocks-data:/var/lib/kvrocks/data
+
+volumes:
+  kvrocks-data:

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getAuthInfoFromCookie } from '@/lib/auth';
+import { getAuthInfoFromCookie, getExpiredAuthCookieOptions } from '@/lib/auth';
 import { revokeRefreshToken } from '@/lib/refresh-token';
 
 export const runtime = 'nodejs';
@@ -20,13 +20,7 @@ export async function POST(request: NextRequest) {
   const response = NextResponse.json({ ok: true });
 
   // 清除认证cookie
-  response.cookies.set('auth', '', {
-    path: '/',
-    expires: new Date(0),
-    sameSite: 'lax',
-    httpOnly: false,
-    secure: false,
-  });
+  response.cookies.set('auth', '', getExpiredAuthCookieOptions(request));
 
   return response;
 }

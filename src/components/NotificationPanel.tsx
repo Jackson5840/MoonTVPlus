@@ -6,8 +6,9 @@ import { Bell, Check, Trash2, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
-import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { Notification } from '@/lib/types';
+
+import { useAuth } from './AuthProvider';
 
 interface NotificationPanelProps {
   isOpen: boolean;
@@ -19,6 +20,7 @@ export const NotificationPanel: React.FC<NotificationPanelProps> = ({
   onClose,
 }) => {
   const router = useRouter();
+  const { authInfo } = useAuth();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -123,8 +125,6 @@ export const NotificationPanel: React.FC<NotificationPanelProps> = ({
       router.push(`/play?source=${source}&id=${id}&title=${encodeURIComponent(title)}`);
       onClose();
     } else if (notification.type === 'movie_request') {
-      // 获取用户角色
-      const authInfo = getAuthInfoFromBrowserCookie();
       const isAdmin = authInfo?.role === 'owner' || authInfo?.role === 'admin';
 
       // 管理员跳转到管理面板，普通用户跳转到我的求片

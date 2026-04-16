@@ -2,12 +2,14 @@
 
 import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
+import { cookies } from 'next/headers';
 
 import './globals.css';
 
 import { getConfig } from '@/lib/config';
 import { listEnabledSourceScripts } from '@/lib/source-script';
 
+import { AuthProvider } from '../components/AuthProvider';
 import { DanmakuCacheCleanup } from '../components/DanmakuCacheCleanup';
 import { DownloadBubble } from '../components/DownloadBubble';
 import { DownloadPanel } from '../components/DownloadPanel';
@@ -27,7 +29,7 @@ export const dynamic = 'force-dynamic';
 export async function generateMetadata(): Promise<Metadata> {
   const storageType = process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
   const config = await getConfig();
-  let siteName = process.env.NEXT_PUBLIC_SITE_NAME || 'MoonTVPlus';
+  let siteName = process.env.NEXT_PUBLIC_SITE_NAME || 'StarsLy小破站';
   if (storageType !== 'localstorage') {
     siteName = config.SiteConfig.SiteName;
   }
@@ -48,9 +50,10 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const hasAuthCookie = !!cookies().get('auth')?.value;
   const storageType = process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
 
-  let siteName = process.env.NEXT_PUBLIC_SITE_NAME || 'MoonTVPlus';
+  let siteName = process.env.NEXT_PUBLIC_SITE_NAME || 'StarsLy小破站';
   let announcement =
     process.env.ANNOUNCEMENT ||
     '本网站仅提供影视信息搜索服务，所有内容均来自第三方网站。本站不存储任何视频资源，不对任何内容的准确性、合法性、完整性负责。';
@@ -172,8 +175,22 @@ export default async function RootLayout({
     );
   }
 
+  const publicRuntimeConfig = {
+    LOGIN_USERNAME_REQUIRED: storageType !== 'localstorage',
+    LOGIN_BACKGROUND_IMAGE: loginBackgroundImage,
+    REGISTER_BACKGROUND_IMAGE: registerBackgroundImage,
+    ENABLE_REGISTRATION: enableRegistration,
+    REQUIRE_REGISTRATION_INVITE_CODE: requireRegistrationInviteCode,
+    LOGIN_REQUIRE_TURNSTILE: loginRequireTurnstile,
+    REGISTRATION_REQUIRE_TURNSTILE: registrationRequireTurnstile,
+    TURNSTILE_SITE_KEY: turnstileSiteKey,
+    ENABLE_OIDC_LOGIN: enableOIDCLogin,
+    ENABLE_OIDC_REGISTRATION: enableOIDCRegistration,
+    OIDC_BUTTON_TEXT: oidcButtonText,
+  };
+
   // 将运行时配置注入到全局 window 对象，供客户端在运行时读取
-  const runtimeConfig = {
+  const privateRuntimeConfig = {
     STORAGE_TYPE: process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage',
     DOUBAN_PROXY_TYPE: doubanProxyType,
     DOUBAN_PROXY: doubanProxy,
@@ -221,6 +238,9 @@ export default async function RootLayout({
     FESTIVE_EFFECT_ENABLED:
       process.env.FESTIVE_EFFECT_ENABLED === 'true',
   };
+  const runtimeConfig = hasAuthCookie
+    ? privateRuntimeConfig
+    : publicRuntimeConfig;
 
   return (
     <html lang='zh-CN' suppressHydrationWarning>
@@ -243,27 +263,29 @@ export default async function RootLayout({
       <body
         className={`${inter.className} min-h-screen bg-white text-gray-900 dark:bg-black dark:text-gray-200`}
       >
-        <ThemeProvider
-          attribute='class'
-          defaultTheme='system'
-          enableSystem
-          disableTransitionOnChange
-        >
-          <TopProgressBar />
-          <TokenRefreshManager />
-          <SiteProvider siteName={siteName} announcement={announcement} tmdbApiKey={tmdbApiKey}>
-            <WatchRoomProvider>
-              <DownloadProvider>
-                <DanmakuCacheCleanup />
-                {children}
-                <GlobalErrorIndicator />
-                <ChatFloatingWindow />
-                <DownloadBubble />
-                <DownloadPanel />
-              </DownloadProvider>
-            </WatchRoomProvider>
-          </SiteProvider>
-        </ThemeProvider>
+        <AuthProvider>
+          <ThemeProvider
+            attribute='class'
+            defaultTheme='system'
+            enableSystem
+            disableTransitionOnChange
+          >
+            <TopProgressBar />
+            <TokenRefreshManager />
+            <SiteProvider siteName={siteName} announcement={announcement} tmdbApiKey={tmdbApiKey}>
+              <WatchRoomProvider>
+                <DownloadProvider>
+                  <DanmakuCacheCleanup />
+                  {children}
+                  <GlobalErrorIndicator />
+                  <ChatFloatingWindow />
+                  <DownloadBubble />
+                  <DownloadPanel />
+                </DownloadProvider>
+              </WatchRoomProvider>
+            </SiteProvider>
+          </ThemeProvider>
+        </AuthProvider>
       </body>
     </html>
   );

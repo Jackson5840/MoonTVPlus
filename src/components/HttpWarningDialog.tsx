@@ -4,13 +4,14 @@ import { AlertTriangle } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
+import { useAuth } from './AuthProvider';
 
 interface HttpWarningDialogProps {
   onClose: () => void;
 }
 
 export default function HttpWarningDialog({ onClose }: HttpWarningDialogProps) {
+  const { authInfo } = useAuth();
   const [isVisible, setIsVisible] = useState(false);
   const [shouldShow, setShouldShow] = useState(false);
 
@@ -25,7 +26,6 @@ export default function HttpWarningDialog({ onClose }: HttpWarningDialogProps) {
       if (dontShowAgain === 'true') return false;
 
       // 检查是否是站长
-      const authInfo = getAuthInfoFromBrowserCookie();
       if (!authInfo || authInfo.role !== 'owner') return false;
 
       // 检查是否是 HTTP 环境（非 localhost 和 127.0.0.1）
@@ -44,7 +44,7 @@ export default function HttpWarningDialog({ onClose }: HttpWarningDialogProps) {
       // 延迟显示动画
       setTimeout(() => setIsVisible(true), 100);
     }
-  }, []);
+  }, [authInfo]);
 
   const handleDontShowAgain = () => {
     localStorage.setItem('httpWarningDismissed', 'true');

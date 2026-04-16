@@ -370,7 +370,7 @@ async function refreshRecordAndFavorites() {
               console.log(`已为用户 ${user} 创建收藏更新通知: ${fav.title}`);
 
               // 收集更新信息用于邮件
-              const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
+              const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3009';
               const playUrl = `${siteUrl}/play?source=${source}&id=${id}&title=${encodeURIComponent(fav.title)}`;
               userUpdates.push({
                 title: fav.title,
@@ -404,8 +404,8 @@ async function refreshRecordAndFavorites() {
                 const emailConfig = config?.EmailConfig;
 
                 if (emailConfig?.enabled) {
-                  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
-                  const siteName = config?.SiteConfig?.SiteName || 'MoonTVPlus';
+                  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3009';
+                  const siteName = config?.SiteConfig?.SiteName || 'StarsLy小破站';
 
                   await EmailService.send(emailConfig, {
                     to: userEmail,
@@ -496,4 +496,3 @@ async function refreshOpenList() {
     console.error('OpenList 定时扫描失败:', err);
   }
 }
-

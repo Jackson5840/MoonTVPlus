@@ -1,9 +1,19 @@
 /* eslint-disable no-console,@typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from 'next/server';
 
-import { parseAuthInfo } from '@/lib/auth';
+import {
+  getAuthCookieOptions,
+  getExpiredAuthCookieOptions,
+  parseAuthInfo,
+  toClientAuthInfo,
+} from '@/lib/auth';
 import { getConfig } from '@/lib/config';
 import { db } from '@/lib/db';
+import {
+  checkLoginRateLimit,
+  clearLoginRateLimit,
+  recordFailedLoginAttempt,
+} from '@/lib/login-rate-limit';
 import {
   generateRefreshToken,
   generateTokenId,
@@ -26,15 +36,44 @@ function buildLoginResponse(authToken?: string | null) {
   const body: Record<string, unknown> = { ok: true };
 
   if (authToken) {
-    body.token = authToken;
     const authInfo = parseAuthInfo(authToken);
     if (authInfo) {
-      const { password, ...rest } = authInfo;
-      body.auth = rest;
+      body.auth = toClientAuthInfo(authInfo);
     }
   }
 
   return NextResponse.json(body);
+}
+
+function setAuthCookie(
+  response: NextResponse,
+  request: NextRequest,
+  cookieValue: string,
+  persistent: boolean,
+  expires?: Date
+) {
+  response.cookies.set(
+    'auth',
+    cookieValue,
+    getAuthCookieOptions(request, { persistent, expires })
+  );
+}
+
+function buildTooManyAttemptsResponse(retryAfterSeconds: number, message?: string) {
+  const statusCode = retryAfterSeconds > 0 ? 429 : 403;
+  const headers: Record<string, string> = {};
+
+  if (statusCode === 429) {
+    headers['Retry-After'] = String(retryAfterSeconds);
+  }
+
+  return NextResponse.json(
+    { error: message || '登录尝试过于频繁，请稍后再试' },
+    {
+      status: statusCode,
+      headers,
+    }
+  );
 }
 
 // 生成签名
@@ -70,10 +109,11 @@ async function generateAuthCookie(
   password?: string,
   role?: 'owner' | 'admin' | 'user',
   includePassword = false,
-  deviceInfo?: string
+  deviceInfo?: string,
+  persistent = true
 ): Promise<string> {
   const now = Date.now();
-  const authData: any = { role: role || 'user' };
+  const authData: any = { role: role || 'user', persistent };
 
   // 只在需要时包含 password
   if (includePassword && password) {
@@ -180,6 +220,24 @@ export async function POST(req: NextRequest) {
     // 获取站点配置
     const adminConfig = await getConfig();
     const siteConfig = adminConfig.SiteConfig;
+    const requestBody = (await req.json().catch(() => null)) as
+      | Record<string, unknown>
+      | null;
+
+    if (!requestBody || typeof requestBody !== 'object') {
+      return NextResponse.json({ error: '请求格式无效' }, { status: 400 });
+    }
+
+    const username =
+      typeof requestBody.username === 'string' ? requestBody.username : undefined;
+    const password =
+      typeof requestBody.password === 'string' ? requestBody.password : undefined;
+    const turnstileToken =
+      typeof requestBody.turnstileToken === 'string'
+        ? requestBody.turnstileToken
+        : undefined;
+    const rememberLogin = requestBody.rememberLogin === true;
+    const persistent = rememberLogin;
 
     // 本地 / localStorage 模式——仅校验固定密码
     if (STORAGE_TYPE === 'localstorage') {
@@ -190,22 +248,32 @@ export async function POST(req: NextRequest) {
         const response = buildLoginResponse();
 
         // 清除可能存在的认证cookie
-        response.cookies.set('auth', '', {
-          path: '/',
-          expires: new Date(0),
-          sameSite: 'lax',
-          httpOnly: false,
-        });
+        response.cookies.set('auth', '', getExpiredAuthCookieOptions(req));
 
         return response;
       }
 
-      const { password } = await req.json();
       if (typeof password !== 'string') {
         return NextResponse.json({ error: '密码不能为空' }, { status: 400 });
       }
 
+      const rateLimitStatus = await checkLoginRateLimit(req);
+      if (!rateLimitStatus.allowed) {
+        return buildTooManyAttemptsResponse(
+          rateLimitStatus.retryAfterSeconds,
+          rateLimitStatus.message
+        );
+      }
+
       if (password !== envPassword) {
+        const failureResult = await recordFailedLoginAttempt(req);
+        if (!failureResult.allowed) {
+          return buildTooManyAttemptsResponse(
+            failureResult.retryAfterSeconds,
+            failureResult.message
+          );
+        }
+
         return NextResponse.json(
           { ok: false, error: '密码错误' },
           { status: 401 }
@@ -219,32 +287,35 @@ export async function POST(req: NextRequest) {
         username,
         password,
         'owner',
-        true,
-        deviceInfo
-      ); // localstorage 模式包含 password
+        false,
+        deviceInfo,
+        persistent
+      ); // localstorage 模式改为签名认证，不再将 password 写入 cookie
       const response = buildLoginResponse(cookieValue);
-      const expires = new Date();
-      expires.setDate(expires.getDate() + 60); // 60天过期（Refresh Token 有效期）
+      const expires = persistent
+        ? new Date(Date.now() + TOKEN_CONFIG.REFRESH_TOKEN_AGE)
+        : undefined;
 
-      response.cookies.set('auth', cookieValue, {
-        path: '/',
-        expires,
-        sameSite: 'lax',
-        httpOnly: false, // 允许客户端访问
-        secure: false,
-      });
+      setAuthCookie(response, req, cookieValue, persistent, expires);
+      await clearLoginRateLimit(req);
 
       return response;
     }
 
     // 数据库 / redis 模式——校验用户名并尝试连接数据库
-    const { username, password, turnstileToken } = await req.json();
-
     if (!username || typeof username !== 'string') {
       return NextResponse.json({ error: '用户名不能为空' }, { status: 400 });
     }
     if (!password || typeof password !== 'string') {
       return NextResponse.json({ error: '密码不能为空' }, { status: 400 });
+    }
+
+    const rateLimitStatus = await checkLoginRateLimit(req, username);
+    if (!rateLimitStatus.allowed) {
+      return buildTooManyAttemptsResponse(
+        rateLimitStatus.retryAfterSeconds,
+        rateLimitStatus.message
+      );
     }
 
     // 如果开启了Turnstile验证
@@ -286,22 +357,27 @@ export async function POST(req: NextRequest) {
         password,
         'owner',
         false,
-        deviceInfo
+        deviceInfo,
+        persistent
       ); // 数据库模式不包含 password
       const response = buildLoginResponse(cookieValue);
-      const expires = new Date();
-      expires.setDate(expires.getDate() + 60); // 60天过期（Refresh Token 有效期）
+      const expires = persistent
+        ? new Date(Date.now() + TOKEN_CONFIG.REFRESH_TOKEN_AGE)
+        : undefined;
 
-      response.cookies.set('auth', cookieValue, {
-        path: '/',
-        expires,
-        sameSite: 'lax',
-        httpOnly: false, // 允许客户端访问
-        secure: false,
-      });
+      setAuthCookie(response, req, cookieValue, persistent, expires);
+      await clearLoginRateLimit(req, username);
 
       return response;
     } else if (username === process.env.USERNAME) {
+      const failureResult = await recordFailedLoginAttempt(req, username);
+      if (!failureResult.allowed) {
+        return buildTooManyAttemptsResponse(
+          failureResult.retryAfterSeconds,
+          failureResult.message
+        );
+      }
+
       return NextResponse.json({ error: '用户名或密码错误' }, { status: 401 });
     }
 
@@ -311,21 +387,45 @@ export async function POST(req: NextRequest) {
     let isBanned = false;
 
     // 验证用户
-    const userInfoV2 = await db.getUserInfoV2(username);
+    try {
+      const userInfoV2 = await db.getUserInfoV2(username);
 
-    if (userInfoV2) {
-      // 使用新版本验证
-      pass = await db.verifyUserV2(username, password);
-      userRole = userInfoV2.role;
-      isBanned = userInfoV2.banned;
+      if (userInfoV2) {
+        // 使用新版本验证
+        pass = await db.verifyUserV2(username, password);
+        userRole = userInfoV2.role;
+        isBanned = userInfoV2.banned;
+      }
+    } catch (error) {
+      console.error('登录接口存储层异常', error);
+      return NextResponse.json(
+        { error: '登录服务暂时不可用' },
+        { status: 503 }
+      );
     }
 
     // 检查用户是否被封禁
     if (isBanned) {
+      const failureResult = await recordFailedLoginAttempt(req, username);
+      if (!failureResult.allowed) {
+        return buildTooManyAttemptsResponse(
+          failureResult.retryAfterSeconds,
+          failureResult.message
+        );
+      }
+
       return NextResponse.json({ error: '用户被封禁' }, { status: 401 });
     }
 
     if (!pass) {
+      const failureResult = await recordFailedLoginAttempt(req, username);
+      if (!failureResult.allowed) {
+        return buildTooManyAttemptsResponse(
+          failureResult.retryAfterSeconds,
+          failureResult.message
+        );
+      }
+
       return NextResponse.json(
         { error: '用户名或密码错误' },
         { status: 401 }
@@ -339,18 +439,16 @@ export async function POST(req: NextRequest) {
       password,
       userRole,
       false,
-      deviceInfo
+      deviceInfo,
+      persistent
     ); // 数据库模式不包含 password
     const response = buildLoginResponse(cookieValue);
-    const expires = new Date();
-    expires.setDate(expires.getDate() + 60); // 60天过期（Refresh Token 有效期）
+    const expires = persistent
+      ? new Date(Date.now() + TOKEN_CONFIG.REFRESH_TOKEN_AGE)
+      : undefined;
 
-  response.cookies.set('auth', cookieValue, {
-    path: '/',
-    expires,
-    sameSite: 'lax',
-    httpOnly: false, // 允许客户端访问
-  });
+    setAuthCookie(response, req, cookieValue, persistent, expires);
+    await clearLoginRateLimit(req, username);
 
     console.log(`Cookie已设置`);
 

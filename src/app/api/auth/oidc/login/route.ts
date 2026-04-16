@@ -1,6 +1,7 @@
 /* eslint-disable no-console */
 import { NextRequest, NextResponse } from 'next/server';
 
+import { shouldUseSecureCookies } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
 
 export const runtime = 'nodejs';
@@ -48,6 +49,7 @@ export async function GET(request: NextRequest) {
       path: '/',
       httpOnly: true,
       sameSite: 'lax',
+      secure: shouldUseSecureCookies(request),
       maxAge: 600, // 10分钟
     });
 

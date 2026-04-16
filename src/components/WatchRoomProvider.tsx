@@ -5,9 +5,8 @@ import React, { createContext, useCallback,useContext, useEffect, useState } fro
 
 import { useWatchRoom } from '@/hooks/useWatchRoom';
 
+import { useAuth } from '@/components/AuthProvider';
 import Toast, { ToastProps } from '@/components/Toast';
-
-import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 
 import type { ChatMessage, Member, Room, RoomType, ScreenState, WatchRoomConfig } from '@/types/watch-room';
 
@@ -44,6 +43,7 @@ interface WatchRoomContextType {
   }) => Promise<{ room: Room; members: Member[] }>;
   leaveRoom: () => void;
   getRoomList: () => Promise<Room[]>;
+  refreshCurrentRoom: () => Promise<{ room: Room; members: Member[] } | null>;
 
   // 聊天
   sendChatMessage: (content: string, type?: 'text' | 'emoji') => void;
@@ -83,11 +83,11 @@ interface WatchRoomProviderProps {
 }
 
 export function WatchRoomProvider({ children }: WatchRoomProviderProps) {
+  const { authInfo } = useAuth();
   const [config, setConfig] = useState<WatchRoomConfig | null>(null);
   const [isEnabled, setIsEnabled] = useState(false);
   const [toast, setToast] = useState<ToastProps | null>(null);
   const [reconnectFailed, setReconnectFailed] = useState(false);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [shouldDisableWatchRoomConnection, setShouldDisableWatchRoomConnection] = useState<boolean | null>(null);
 
   // 处理房间删除的回调
@@ -135,22 +135,7 @@ export function WatchRoomProvider({ children }: WatchRoomProviderProps) {
     );
   }, []);
 
-  // 检查登录状态
-  useEffect(() => {
-    const checkLoginStatus = () => {
-      const authInfo = getAuthInfoFromBrowserCookie();
-      const loggedIn = !!(authInfo && authInfo.username);
-      setIsLoggedIn(loggedIn);
-    };
-
-    // 初始检查
-    checkLoginStatus();
-
-    // 定期检查登录状态（每秒检查一次）
-    const interval = setInterval(checkLoginStatus, 1000);
-
-    return () => clearInterval(interval);
-  }, []);
+  const isLoggedIn = !!authInfo?.username;
 
   // 手动重连
   const manualReconnect = useCallback(async () => {
@@ -163,14 +148,15 @@ export function WatchRoomProvider({ children }: WatchRoomProviderProps) {
     if (success) {
       console.log('[WatchRoomProvider] Manual reconnect succeeded');
       // 尝试重新加入房间
-      const storedInfo = localStorage.getItem('watch_room_info');
+      const storedInfo =
+        sessionStorage.getItem('watch_room_info')
+        || localStorage.getItem('watch_room_info');
       if (storedInfo && watchRoom.socket) {
         try {
           const info = JSON.parse(storedInfo);
           console.log('[WatchRoomProvider] Attempting to rejoin room after reconnect');
           await watchRoom.joinRoom({
             roomId: info.roomId,
-            password: info.password,
             userName: info.userName,
             ownerToken: info.ownerToken,
           });
@@ -205,7 +191,7 @@ export function WatchRoomProvider({ children }: WatchRoomProviderProps) {
         const response = await fetch('/api/server-config');
         if (response.ok) {
           const data = await response.json();
-          // API 返回格式: { SiteName, StorageType, Version, WatchRoom }
+          // API 返回格式: { SiteName, WatchRoom, EnableOfflineDownload }
           const watchRoomConfig: WatchRoomConfig = {
             enabled: data.WatchRoom?.enabled ?? false, // 默认不启用
             serverType: data.WatchRoom?.serverType ?? 'internal',
@@ -306,6 +292,7 @@ export function WatchRoomProvider({ children }: WatchRoomProviderProps) {
     joinRoom: watchRoom.joinRoom,
     leaveRoom: watchRoom.leaveRoom,
     getRoomList: watchRoom.getRoomList,
+    refreshCurrentRoom: watchRoom.refreshCurrentRoom,
     sendChatMessage: watchRoom.sendChatMessage,
     updatePlayState: watchRoom.updatePlayState,
     seekPlayback: watchRoom.seekPlayback,

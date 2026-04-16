@@ -6,7 +6,6 @@ import { AlertCircle, Cloud, Heart, Loader2, Router, Sparkles, X } from 'lucide-
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState } from 'react';
 
-import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import {
   convertDanmakuFormat,
   getDanmakuById,
@@ -55,6 +54,7 @@ import { usePlaySync } from '@/hooks/usePlaySync';
 
 import AIChatPanel from '@/components/AIChatPanel';
 import AIComments from '@/components/AIComments';
+import { useAuth } from '@/components/AuthProvider';
 import CorrectDialog from '@/components/CorrectDialog';
 import DanmakuFilterSettings from '@/components/DanmakuFilterSettings';
 import DetailPanel from '@/components/DetailPanel';
@@ -68,8 +68,10 @@ import ProxyImage from '@/components/ProxyImage';
 import { useSite } from '@/components/SiteProvider';
 import SmartRecommendations from '@/components/SmartRecommendations';
 import Toast, { ToastProps } from '@/components/Toast';
+import { useWatchRoomContextSafe } from '@/components/WatchRoomProvider';
 
 import { useDownload } from '@/contexts/DownloadContext';
+import type { SourceSyncCandidate, SourceSyncReportItem, SourceSyncResult } from '@/types/watch-room';
 
 // 扩展 HTMLVideoElement 类型以支持 hls 属性
 declare global {
@@ -88,18 +90,17 @@ interface WakeLockSentinel {
 
 function PlayPageClient() {
   const LOCAL_TRANSCODER_BASE_URL = 'http://localhost:19080';
+  const { authInfo } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   const enableComments = useEnableComments();
   const enableAIComments = useEnableAIComments();
   const { addDownloadTask } = useDownload();
   const { siteName } = useSite();
+  const watchRoom = useWatchRoomContextSafe();
 
   // 获取 Proxy M3U8 Token
   const proxyToken = typeof window !== 'undefined' ? process.env.NEXT_PUBLIC_PROXY_M3U8_TOKEN || '' : '';
-
-  // 获取用户认证信息
-  const authInfo = typeof window !== 'undefined' ? getAuthInfoFromBrowserCookie() : null;
 
   // 离线下载功能配置
   const enableOfflineDownload = typeof window !== 'undefined'
@@ -461,26 +462,26 @@ function PlayPageClient() {
     })()
   );
 
-  // 弹幕热力图完全禁用开关（默认不禁用，即启用热力图功能）
+  // 弹幕热力图完全禁用开关（默认禁用）
   const [danmakuHeatmapDisabled, setDanmakuHeatmapDisabled] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const v = localStorage.getItem('danmaku_heatmap_disabled');
       if (v !== null) return v === 'true';
     }
-    return false; // 默认不禁用
+    return true; // 默认禁用
   });
   const danmakuHeatmapDisabledRef = useRef(danmakuHeatmapDisabled);
   useEffect(() => {
     danmakuHeatmapDisabledRef.current = danmakuHeatmapDisabled;
   }, [danmakuHeatmapDisabled]);
 
-  // 弹幕热力图开关（默认开启）
+  // 弹幕热力图开关（默认关闭）
   const [danmakuHeatmapEnabled, setDanmakuHeatmapEnabled] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const v = localStorage.getItem('danmaku_heatmap_enabled');
       if (v !== null) return v === 'true';
     }
-    return true; // 默认开启
+    return false; // 默认关闭
   });
   const danmakuHeatmapEnabledRef = useRef(danmakuHeatmapEnabled);
   useEffect(() => {
@@ -490,6 +491,23 @@ function PlayPageClient() {
   // 多条弹幕匹配结果
   const [danmakuMatches, setDanmakuMatches] = useState<DanmakuAnime[]>([]);
   const [showDanmakuSourceSelector, setShowDanmakuSourceSelector] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    if (localStorage.getItem('disableAutoLoadDanmaku') === null) {
+      localStorage.setItem('disableAutoLoadDanmaku', 'true');
+    }
+    if (localStorage.getItem('nextEpisodeDanmakuPreload') === null) {
+      localStorage.setItem('nextEpisodeDanmakuPreload', 'false');
+    }
+    if (localStorage.getItem('danmaku_heatmap_disabled') === null) {
+      localStorage.setItem('danmaku_heatmap_disabled', 'true');
+    }
+    if (localStorage.getItem('danmaku_heatmap_enabled') === null) {
+      localStorage.setItem('danmaku_heatmap_enabled', 'false');
+    }
+  }, []);
   const [showDanmakuFilterSettings, setShowDanmakuFilterSettings] = useState(false);
   const [currentSearchKeyword, setCurrentSearchKeyword] = useState<string>(''); // 当前搜索使用的关键词
   const [toast, setToast] = useState<ToastProps | null>(null);
@@ -1445,9 +1463,6 @@ function PlayPageClient() {
 
       const requestHeaders: Record<string, string> = {};
       if (sourceUrl.startsWith(window.location.origin)) {
-        if (document.cookie) {
-          requestHeaders.Cookie = document.cookie;
-        }
         requestHeaders.Referer = `${window.location.origin}/`;
       }
 
@@ -1648,9 +1663,142 @@ function PlayPageClient() {
     searchTitle: searchTitle || '',
     currentEpisode: currentEpisodeIndex + 1,
     currentSource: currentSource || '',
+    currentSourceName: detail?.source_name || currentSource || '',
     videoUrl: videoUrl || '',
     playerReady: playerReady,  // 传递播放器就绪状态
   });
+  const [pendingDriftToleranceMs, setPendingDriftToleranceMs] = useState(300);
+  const [sourceSyncInProgress, setSourceSyncInProgress] = useState(false);
+  const [sourceSyncRequestId, setSourceSyncRequestId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setPendingDriftToleranceMs(playSync.ownerDriftToleranceMs);
+  }, [playSync.ownerDriftToleranceMs]);
+
+  const parseSpeedToKBps = (speedStr: string): number => {
+    if (!speedStr || speedStr === '未知' || speedStr === '测量中...') {
+      return 0;
+    }
+
+    const match = speedStr.match(/^([\d.]+)\s*(KB\/s|MB\/s)$/);
+    if (!match) {
+      return 0;
+    }
+
+    const value = parseFloat(match[1]);
+    return match[2] === 'MB/s' ? value * 1024 : value;
+  };
+
+  const hashPlaylistSignature = (input: string): string => {
+    let hash = 5381;
+    for (let index = 0; index < input.length; index += 1) {
+      hash = ((hash << 5) + hash) + input.charCodeAt(index);
+    }
+    return `pl-${Math.abs(hash >>> 0).toString(36)}`;
+  };
+
+  const inspectPlaylistForSync = async (
+    playlistUrl: string
+  ): Promise<Pick<SourceSyncReportItem, 'playlistFingerprint' | 'totalDurationSeconds'>> => {
+    try {
+      const response = await fetch(playlistUrl, {
+        method: 'GET',
+        cache: 'no-store',
+      });
+
+      if (!response.ok) {
+        return {};
+      }
+
+      const text = await response.text();
+      if (!text || !text.includes('#EXTM3U')) {
+        return {};
+      }
+
+      const lines = text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+      const resourceLines: string[] = [];
+      let totalDurationSeconds = 0;
+
+      lines.forEach((line) => {
+        if (line.startsWith('#EXTINF:')) {
+          const match = line.match(/^#EXTINF:([\d.]+)/);
+          if (match) {
+            totalDurationSeconds += Number.parseFloat(match[1]) || 0;
+          }
+          return;
+        }
+
+        if (!line.startsWith('#')) {
+          resourceLines.push(line);
+        }
+      });
+
+      const signatureSeed = [
+        ...resourceLines.slice(0, 8),
+        totalDurationSeconds > 0 ? `duration:${totalDurationSeconds.toFixed(1)}` : '',
+      ]
+        .filter(Boolean)
+        .join('|');
+
+      return {
+        playlistFingerprint: signatureSeed ? hashPlaylistSignature(signatureSeed) : undefined,
+        totalDurationSeconds:
+          totalDurationSeconds > 0
+            ? Number(totalDurationSeconds.toFixed(1))
+            : undefined,
+      };
+    } catch (error) {
+      return {};
+    }
+  };
+
+  const otherMemberSourceStatus = (watchRoom?.members || [])
+    .filter((member) => !member.isOwner)
+    .map((member) => ({
+      id: member.id,
+      name: member.name,
+      sameSource:
+        member.currentSource === currentSource &&
+        member.currentVideoId === currentId,
+      currentSourceName: member.currentSourceName || member.currentSource || '未知',
+    }));
+
+  const handleSyncSource = async () => {
+    if (!watchRoom?.socket || !watchRoom?.currentRoom || !playSync.isOwner) {
+      return;
+    }
+
+    const candidates: SourceSyncCandidate[] = availableSources.map((source) => ({
+      source: source.source,
+      id: source.id,
+      title: source.title,
+      weight: source.weight,
+    }));
+
+    if (candidates.length === 0) {
+      setToast({
+        message: '当前没有可供同步的播放源',
+        type: 'error',
+        onClose: () => setToast(null),
+      });
+      return;
+    }
+
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setSourceSyncInProgress(true);
+    setSourceSyncRequestId(requestId);
+
+    watchRoom.socket.emit('source:sync-request', {
+      requestId,
+      videoId: currentId || '',
+      candidates,
+    });
+  };
+
 
   // -----------------------------------------------------------------------------
   // 工具函数（Utils）
@@ -1953,6 +2101,64 @@ function PlayPageClient() {
     score += weight;
 
     return Math.round(score * 100) / 100; // 保留两位小数
+  };
+
+  const testSourcesForSync = async (
+    candidates: SourceSyncCandidate[]
+  ): Promise<SourceSyncReportItem[]> => {
+    const reports = await Promise.all(
+      candidates.map(async (candidate) => {
+        const source = availableSources.find(
+          (item) => item.source === candidate.source && item.id === candidate.id
+        );
+
+        if (!source || !source.episodes || source.episodes.length === 0) {
+          return {
+            ...candidate,
+            available: false,
+            speedKBps: 0,
+          };
+        }
+
+        try {
+          let episodeUrl =
+            source.episodes.length > 1 ? source.episodes[1] : source.episodes[0];
+          const isM3u8 =
+            episodeUrl.toLowerCase().includes('.m3u') ||
+            !episodeUrl
+              .toLowerCase()
+              .match(/\.(mp4|flv|webm|mkv|avi|mov)(\?.*)?$/);
+
+          if (source.source === 'directplay' && isM3u8) {
+            if (isDirectplayDomainProxied(episodeUrl)) {
+              const tokenParam = proxyToken ? `&token=${encodeURIComponent(proxyToken)}` : '';
+              episodeUrl = `/api/proxy-m3u8?url=${encodeURIComponent(episodeUrl)}&source=directplay${tokenParam}`;
+            }
+          } else if (source.proxyMode && isM3u8) {
+            episodeUrl = `/api/proxy/vod/m3u8?url=${encodeURIComponent(episodeUrl)}&source=${encodeURIComponent(source.source)}`;
+          }
+
+          const [testResult, syncMetadata] = await Promise.all([
+            getVideoResolutionFromM3u8(episodeUrl, 4000),
+            inspectPlaylistForSync(episodeUrl),
+          ]);
+          return {
+            ...candidate,
+            available: true,
+            speedKBps: parseSpeedToKBps(testResult.loadSpeed),
+            ...syncMetadata,
+          };
+        } catch (error) {
+          return {
+            ...candidate,
+            available: false,
+            speedKBps: 0,
+          };
+        }
+      })
+    );
+
+    return reports;
   };
 
   // 检查是否有本地下载的视频
@@ -4209,6 +4415,80 @@ function PlayPageClient() {
       setCurrentEpisodeIndex(episodeNumber);
     }
   };
+
+  useEffect(() => {
+    if (!watchRoom?.socket || !watchRoom.currentRoom) return;
+
+    const handleSourceSyncRequest = async (data: {
+      requestId: string;
+      videoId: string;
+      candidates: SourceSyncCandidate[];
+    }) => {
+      if (data.videoId !== (currentId || '')) {
+        return;
+      }
+
+      if (!data.candidates || data.candidates.length === 0) {
+        return;
+      }
+
+      const results = await testSourcesForSync(data.candidates);
+      watchRoom.socket?.emit('source:sync-report', {
+        requestId: data.requestId,
+        videoId: data.videoId,
+        results,
+      });
+    };
+
+    const handleSourceSyncResult = async (data: SourceSyncResult) => {
+      setSourceSyncInProgress(false);
+      setSourceSyncRequestId(null);
+
+      if (!data.selected) {
+        setToast({
+          message: data.error || '没有找到所有成员都可用的同一播放源',
+          type: 'error',
+          onClose: () => setToast(null),
+        });
+        return;
+      }
+
+      if (data.selected.source === currentSource && data.selected.id === currentId) {
+        setToast({
+          message: `已对齐统一播放源：${data.selected.source}`,
+          type: 'success',
+          onClose: () => setToast(null),
+        });
+        return;
+      }
+
+      await handleSourceChange(
+        data.selected.source,
+        data.selected.id,
+        data.selected.title
+      );
+      setToast({
+        message: `已同步播放源：${data.selected.source}`,
+        type: 'success',
+        onClose: () => setToast(null),
+      });
+    };
+
+    watchRoom.socket.on('source:sync-request', handleSourceSyncRequest);
+    watchRoom.socket.on('source:sync-result', handleSourceSyncResult);
+
+    return () => {
+      watchRoom.socket?.off('source:sync-request', handleSourceSyncRequest);
+      watchRoom.socket?.off('source:sync-result', handleSourceSyncResult);
+    };
+  }, [
+    currentId,
+    currentSource,
+    handleSourceChange,
+    testSourcesForSync,
+    watchRoom?.currentRoom,
+    watchRoom?.socket,
+  ]);
 
   const handlePreviousEpisode = () => {
     const d = detailRef.current;
@@ -8197,6 +8477,128 @@ function PlayPageClient() {
               );
             })()}
           </h1>
+          {playSync.isInRoom && (
+            <div
+              className={`mt-3 flex w-full max-w-3xl flex-wrap items-center gap-2 rounded-xl border px-4 py-3 text-sm shadow-sm ${
+                tmdbBackdrop
+                  ? 'border-white/20 bg-black/45 text-white'
+                  : 'border-gray-200 bg-white/95 text-gray-800 dark:border-gray-700 dark:bg-gray-900/90 dark:text-gray-200'
+              }`}
+            >
+              <span
+                className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${
+                  playSync.isOwner
+                    ? 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
+                    : playSync.syncStatus === 'in_sync' || playSync.syncStatus === 'paused_synced'
+                      ? 'bg-green-500/15 text-green-600 dark:text-green-300'
+                      : playSync.syncStatus === 'waiting_gesture'
+                        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
+                        : 'bg-purple-500/15 text-purple-600 dark:text-purple-300'
+                }`}
+              >
+                {playSync.isOwner ? '房主广播中' : '同步状态'}
+              </span>
+              <span className='font-medium'>{playSync.syncMessage}</span>
+              {typeof playSync.driftMs === 'number' && !playSync.isOwner && (
+                <span className='text-xs opacity-70'>
+                  偏差 {Math.abs(playSync.driftMs)}ms
+                </span>
+              )}
+              {!playSync.isOwner && (
+                <span className='text-xs opacity-70'>
+                  建议 iPad Safari 保持前台，后台返回后可点“重新同步”
+                </span>
+              )}
+              {playSync.isOwner && (
+                <>
+                  <button
+                    onClick={() => {
+                      playSync.setOwnerAutoCorrectionEnabled(!playSync.ownerAutoCorrectionEnabled);
+                    }}
+                    className={`rounded-md px-2.5 py-1 text-xs font-medium text-white transition-colors ${
+                      playSync.ownerAutoCorrectionEnabled
+                        ? 'bg-green-500 hover:bg-green-600'
+                        : 'bg-gray-500 hover:bg-gray-600'
+                    }`}
+                  >
+                    自动校正：{playSync.ownerAutoCorrectionEnabled ? '开启' : '关闭'}
+                  </button>
+                  <div className='flex items-center gap-2 rounded-md bg-white/10 px-2 py-1'>
+                    <span className='text-xs opacity-80'>偏差阈值</span>
+                    <input
+                      type='number'
+                      min='100'
+                      max='5000'
+                      step='50'
+                      value={pendingDriftToleranceMs}
+                      onChange={(event) => {
+                        const value = Number(event.target.value);
+                        if (Number.isFinite(value)) {
+                          setPendingDriftToleranceMs(value);
+                        }
+                      }}
+                      className='w-20 rounded border border-white/20 bg-black/20 px-2 py-1 text-xs text-white outline-none'
+                    />
+                    <span className='text-xs opacity-70'>ms</span>
+                    <button
+                      onClick={() => {
+                        const normalized = Math.max(100, Math.min(5000, pendingDriftToleranceMs || 300));
+                        setPendingDriftToleranceMs(normalized);
+                        playSync.setOwnerDriftToleranceMs(normalized);
+                      }}
+                      className='rounded-md bg-purple-500 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-purple-600'
+                    >
+                      保存
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => {
+                      playSync.broadcastCurrentTimeToChat();
+                    }}
+                    className='rounded-md bg-blue-500 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-blue-600'
+                  >
+                    发送当前时间到聊天
+                  </button>
+                  <button
+                    onClick={() => {
+                      void handleSyncSource();
+                    }}
+                    disabled={sourceSyncInProgress || availableSources.length === 0}
+                    className='rounded-md bg-indigo-500 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-50'
+                  >
+                    {sourceSyncInProgress ? '同步源中...' : '同步源'}
+                  </button>
+                </>
+              )}
+              {playSync.isOwner && otherMemberSourceStatus.length > 0 && (
+                <div className='flex w-full flex-wrap items-center gap-2 pt-1'>
+                  <span className='text-xs opacity-70'>成员源状态：</span>
+                  {otherMemberSourceStatus.map((member) => (
+                    <span
+                      key={member.id}
+                      className={`rounded-full px-2 py-1 text-xs ${
+                        member.sameSource
+                          ? 'bg-green-500/15 text-green-600 dark:text-green-300'
+                          : 'bg-red-500/15 text-red-600 dark:text-red-300'
+                      }`}
+                    >
+                      {member.name}：{member.sameSource ? '同源' : `不同源(${member.currentSourceName})`}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {!playSync.isOwner && (
+                <button
+                  onClick={() => {
+                    void playSync.manualResync();
+                  }}
+                  className='rounded-md bg-green-500 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-green-600'
+                >
+                  {playSync.needsManualSync ? '点击开始同步' : '重新同步'}
+                </button>
+              )}
+            </div>
+          )}
         </div>
         {/* 第二行：播放器和选集 */}
         <div className='space-y-2'>
@@ -8256,6 +8658,19 @@ function PlayPageClient() {
                   ref={artRef}
                   className='bg-black w-full h-full rounded-xl overflow-hidden shadow-lg'
                 ></div>
+
+                {playSync.isInRoom && !playSync.isOwner && playSync.needsManualSync && (
+                  <div className='absolute inset-0 z-[550] flex items-center justify-center bg-black/50 backdrop-blur-sm rounded-xl'>
+                    <div className='mx-4 max-w-sm rounded-2xl bg-white/95 dark:bg-gray-900/95 px-6 py-5 text-center shadow-2xl'>
+                      <div className='text-lg font-semibold text-gray-900 dark:text-gray-100'>
+                        点击任意位置开始同步
+                      </div>
+                      <div className='mt-2 text-sm text-gray-600 dark:text-gray-400'>
+                        iPad Safari 需要一次用户手势才能恢复房主的播放状态。
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* 换源加载蒙层 */}
                 {(isVideoLoading || videoError) && (

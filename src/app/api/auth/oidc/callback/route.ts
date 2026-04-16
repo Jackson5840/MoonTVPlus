@@ -1,6 +1,7 @@
 /* eslint-disable no-console,@typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from 'next/server';
 
+import { getAuthCookieOptions, shouldUseSecureCookies } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
 import { db } from '@/lib/db';
 import {
@@ -73,7 +74,7 @@ async function generateAuthCookie(
   role: 'owner' | 'admin' | 'user',
   deviceInfo: string
 ): Promise<string> {
-  const authData: any = { role };
+  const authData: any = { role, persistent: true };
 
   if (username && process.env.PASSWORD) {
     authData.username = username;
@@ -237,16 +238,20 @@ export async function GET(request: NextRequest) {
       const cookieValue = await generateAuthCookie(username, userRole, deviceInfo);
       const expires = new Date(Date.now() + TOKEN_CONFIG.REFRESH_TOKEN_AGE);
 
-      response.cookies.set('auth', cookieValue, {
-        path: '/',
-        expires,
-        sameSite: 'lax',
-        httpOnly: false,
-        secure: false,
-      });
+      response.cookies.set(
+        'auth',
+        cookieValue,
+        getAuthCookieOptions(request, { persistent: true, expires })
+      );
 
       // 清除state cookie
-      response.cookies.delete('oidc_state');
+      response.cookies.set('oidc_state', '', {
+        path: '/',
+        expires: new Date(0),
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: shouldUseSecureCookies(request),
+      });
 
       return response;
     }
@@ -273,11 +278,18 @@ export async function GET(request: NextRequest) {
       path: '/',
       httpOnly: true,
       sameSite: 'lax',
+      secure: shouldUseSecureCookies(request),
       maxAge: 600, // 10分钟
     });
 
     // 清除state cookie
-    response.cookies.delete('oidc_state');
+    response.cookies.set('oidc_state', '', {
+      path: '/',
+      expires: new Date(0),
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: shouldUseSecureCookies(request),
+    });
 
     return response;
   } catch (error) {

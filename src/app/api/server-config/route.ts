@@ -3,7 +3,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getConfig } from '@/lib/config';
-import { CURRENT_VERSION } from '@/lib/version';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic'; // 禁用缓存
@@ -33,9 +32,7 @@ export async function GET(request: NextRequest) {
   // 如果使用 localStorage，返回默认配置
   if (storageType === 'localstorage') {
     return NextResponse.json({
-      SiteName: process.env.NEXT_PUBLIC_SITE_NAME || 'MoonTVPlus',
-      StorageType: 'localstorage',
-      Version: CURRENT_VERSION,
+      SiteName: process.env.NEXT_PUBLIC_SITE_NAME || 'StarsLy小破站',
       WatchRoom: watchRoomConfig,
       EnableOfflineDownload: process.env.NEXT_PUBLIC_ENABLE_OFFLINE_DOWNLOAD === 'true',
     });
@@ -45,30 +42,8 @@ export async function GET(request: NextRequest) {
   const config = await getConfig();
   const result = {
     SiteName: config.SiteConfig.SiteName,
-    StorageType: storageType,
-    Version: CURRENT_VERSION,
     WatchRoom: watchRoomConfig,
     EnableOfflineDownload: process.env.NEXT_PUBLIC_ENABLE_OFFLINE_DOWNLOAD === 'true',
-    EnableRegistration: config.SiteConfig.EnableRegistration || false,
-    RequireRegistrationInviteCode: config.SiteConfig.RequireRegistrationInviteCode || false,
-    RegistrationRequireTurnstile: config.SiteConfig.RegistrationRequireTurnstile || false,
-    LoginRequireTurnstile: config.SiteConfig.LoginRequireTurnstile || false,
-    TurnstileSiteKey: config.SiteConfig.TurnstileSiteKey || '',
-    EnableOIDCLogin: config.SiteConfig.EnableOIDCLogin || false,
-    EnableOIDCRegistration: config.SiteConfig.EnableOIDCRegistration || false,
-    OIDCButtonText: config.SiteConfig.OIDCButtonText || '',
-    loginBackgroundImage: config.ThemeConfig?.loginBackgroundImage || '',
-    registerBackgroundImage: config.ThemeConfig?.registerBackgroundImage || '',
-    progressThumbType: config.ThemeConfig?.progressThumbType || 'default',
-    progressThumbPresetId: config.ThemeConfig?.progressThumbPresetId || '',
-    progressThumbCustomUrl: config.ThemeConfig?.progressThumbCustomUrl || '',
-    // AI配置（只暴露功能开关，不暴露API密钥等敏感信息）
-    AIEnabled: config.AIConfig?.Enabled || false,
-    AIEnableHomepageEntry: config.AIConfig?.EnableHomepageEntry || false,
-    AIEnableVideoCardEntry: config.AIConfig?.EnableVideoCardEntry || false,
-    AIEnablePlayPageEntry: config.AIConfig?.EnablePlayPageEntry || false,
-    AIDefaultMessageNoVideo: config.AIConfig?.DefaultMessageNoVideo || '',
-    AIDefaultMessageWithVideo: config.AIConfig?.DefaultMessageWithVideo || '',
   };
   return NextResponse.json(result);
 }

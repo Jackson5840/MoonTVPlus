@@ -2,70 +2,15 @@
 
 'use client';
 
-import { AlertCircle, CheckCircle, Eye, EyeOff, User, Lock } from 'lucide-react';
+import { Eye, EyeOff, Lock,User } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 
-import { CURRENT_VERSION } from '@/lib/version';
-import { checkForUpdates, UpdateStatus } from '@/lib/version_check';
+import { patchClientAuthState } from '@/lib/client-auth';
+import { sanitizeInternalRedirect } from '@/lib/safe-redirect';
 
 import { useSite } from '@/components/SiteProvider';
 import { ThemeToggle } from '@/components/ThemeToggle';
-
-// 版本显示组件
-function VersionDisplay() {
-  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
-  const [isChecking, setIsChecking] = useState(true);
-
-  useEffect(() => {
-    const checkUpdate = async () => {
-      try {
-        const status = await checkForUpdates();
-        setUpdateStatus(status);
-      } catch (_) {
-        // do nothing
-      } finally {
-        setIsChecking(false);
-      }
-    };
-
-    checkUpdate();
-  }, []);
-
-  return (
-    <button
-      onClick={() =>
-        window.open('https://github.com/mtvpls/MoonTVPlus', '_blank')
-      }
-      className='absolute bottom-4 left-1/2 transform -translate-x-1/2 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 transition-colors cursor-pointer'
-    >
-      <span className='font-mono'>v{CURRENT_VERSION}</span>
-      {!isChecking && updateStatus !== UpdateStatus.FETCH_FAILED && (
-        <div
-          className={`flex items-center gap-1.5 ${updateStatus === UpdateStatus.HAS_UPDATE
-            ? 'text-yellow-600 dark:text-yellow-400'
-            : updateStatus === UpdateStatus.NO_UPDATE
-              ? 'text-green-600 dark:text-green-400'
-              : ''
-            }`}
-        >
-          {updateStatus === UpdateStatus.HAS_UPDATE && (
-            <>
-              <AlertCircle className='w-3.5 h-3.5' />
-              <span className='font-semibold text-xs'>有新版本</span>
-            </>
-          )}
-          {updateStatus === UpdateStatus.NO_UPDATE && (
-            <>
-              <CheckCircle className='w-3.5 h-3.5' />
-              <span className='font-semibold text-xs'>已是最新</span>
-            </>
-          )}
-        </div>
-      )}
-    </button>
-  );
-}
 
 // 根据按钮文本识别OIDC提供商并返回对应的图标
 function getOIDCProviderIcon(buttonText: string) {
@@ -101,7 +46,7 @@ function LoginPageClient() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [shouldAskUsername, setShouldAskUsername] = useState(false);
-  const [rememberPassword, setRememberPassword] = useState(false);
+  const [rememberLogin, setRememberLogin] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const [turnstileLoaded, setTurnstileLoaded] = useState(false);
@@ -123,8 +68,7 @@ function LoginPageClient() {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const runtimeConfig = (window as any).RUNTIME_CONFIG;
-      const storageType = runtimeConfig?.STORAGE_TYPE;
-      const shouldAsk = storageType && storageType !== 'localstorage';
+      const shouldAsk = runtimeConfig?.LOGIN_USERNAME_REQUIRED === true;
       setShouldAskUsername(shouldAsk);
 
       // 设置背景图（支持多张随机选择）
@@ -151,23 +95,8 @@ function LoginPageClient() {
         OIDCButtonText: runtimeConfig?.OIDC_BUTTON_TEXT || '',
       });
 
-      // 从localStorage读取记住的密码信息
-      const rememberedCredentials = localStorage.getItem('rememberedCredentials');
-      if (rememberedCredentials) {
-        try {
-          const credentials = JSON.parse(rememberedCredentials);
-          if (credentials.password) {
-            setPassword(credentials.password);
-          }
-          if (credentials.username && shouldAsk) {
-            setUsername(credentials.username);
-          }
-          setRememberPassword(true);
-        } catch (error) {
-          // 清除无效的数据
-          localStorage.removeItem('rememberedCredentials');
-        }
-      }
+      // 清理旧版本遗留的明文密码缓存。
+      localStorage.removeItem('rememberedCredentials');
     }
   }, []);
 
@@ -229,25 +158,21 @@ function LoginPageClient() {
         body: JSON.stringify({
           password,
           ...(shouldAskUsername ? { username } : {}),
+          rememberLogin,
           ...(siteConfig?.LoginRequireTurnstile ? { turnstileToken } : {}),
         }),
       });
 
       if (res.ok) {
-        // 处理记住密码逻辑
-        if (rememberPassword) {
-          const credentials: any = { password };
-          // 如果需要用户名且有用户名，就保存用户名
-          if (shouldAskUsername && username) {
-            credentials.username = username;
-          }
-          localStorage.setItem('rememberedCredentials', JSON.stringify(credentials));
-        } else {
-          // 如果不记住密码，清除已存储的信息
-          localStorage.removeItem('rememberedCredentials');
-        }
-
-        const redirect = searchParams.get('redirect') || '/';
+        const data = await res.json().catch(() => null);
+        patchClientAuthState({
+          authInfo: data?.auth ?? null,
+          loading: false,
+        });
+        const redirect = sanitizeInternalRedirect(
+          searchParams.get('redirect'),
+          '/'
+        );
         router.replace(redirect);
       } else {
         // 登录失败，重置Turnstile
@@ -357,20 +282,20 @@ function LoginPageClient() {
             <p className='text-sm text-red-600 dark:text-red-400'>{error}</p>
           )}
 
-          {/* 记住密码复选框 */}
+          {/* 登录保持时长 */}
           <div className='flex items-center'>
             <input
-              id='remember-password'
+              id='remember-login'
               type='checkbox'
               className='h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500 dark:border-gray-600 dark:bg-gray-700'
-              checked={rememberPassword}
-              onChange={(e) => setRememberPassword(e.target.checked)}
+              checked={rememberLogin}
+              onChange={(e) => setRememberLogin(e.target.checked)}
             />
             <label
-              htmlFor='remember-password'
+              htmlFor='remember-login'
               className='ml-2 block text-sm text-gray-700 dark:text-gray-300'
             >
-              记住密码
+              保持登录 60 天
             </label>
           </div>
 
@@ -424,9 +349,6 @@ function LoginPageClient() {
           </div>
         )}
       </div>
-
-      {/* 版本信息显示 */}
-      <VersionDisplay />
     </div>
   );
 }

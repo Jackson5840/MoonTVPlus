@@ -38,25 +38,22 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
+import { clearAuthCookie } from '@/lib/auth';
 import { clearAllDanmakuCache } from '@/lib/danmaku/api';
 import { CURRENT_VERSION } from '@/lib/version';
 import { UpdateStatus } from '@/lib/version_check';
 
+import { useAuth } from './AuthProvider';
+import { DownloadManagementPanel } from './DownloadManagementPanel';
 import { FavoritesPanel } from './FavoritesPanel';
 import { NotificationPanel } from './NotificationPanel';
 import { OfflineDownloadPanel } from './OfflineDownloadPanel';
 import { useVersionCheck } from './VersionCheckProvider';
 import { VersionPanel } from './VersionPanel';
-import { DownloadManagementPanel } from './DownloadManagementPanel';
-
-interface AuthInfo {
-  username?: string;
-  role?: 'owner' | 'admin' | 'user';
-}
 
 export const UserMenu: React.FC = () => {
   const router = useRouter();
+  const { authInfo } = useAuth();
   const { updateStatus, isChecking } = useVersionCheck();
   const [isOpen, setIsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -71,7 +68,6 @@ export const UserMenu: React.FC = () => {
   const [isEcoAppsOpen, setIsEcoAppsOpen] = useState(false);
   const [isReportOpen, setIsReportOpen] = useState(false);
   const [isDownloadManagementOpen, setIsDownloadManagementOpen] = useState(false);
-  const [authInfo, setAuthInfo] = useState<AuthInfo | null>(null);
   const [storageType, setStorageType] = useState<string>('localstorage');
   const [mounted, setMounted] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -132,10 +128,10 @@ export const UserMenu: React.FC = () => {
     useState(false);
   const [bufferStrategy, setBufferStrategy] = useState('medium');
   const [nextEpisodePreCache, setNextEpisodePreCache] = useState(true);
-  const [nextEpisodeDanmakuPreload, setNextEpisodeDanmakuPreload] = useState(true);
-  const [disableAutoLoadDanmaku, setDisableAutoLoadDanmaku] = useState(false);
+  const [nextEpisodeDanmakuPreload, setNextEpisodeDanmakuPreload] = useState(false);
+  const [disableAutoLoadDanmaku, setDisableAutoLoadDanmaku] = useState(true);
   const [danmakuMaxCount, setDanmakuMaxCount] = useState(0);
-  const [danmakuHeatmapDisabled, setDanmakuHeatmapDisabled] = useState(false);
+  const [danmakuHeatmapDisabled, setDanmakuHeatmapDisabled] = useState(true);
   const [searchTraditionalToSimplified, setSearchTraditionalToSimplified] = useState(false);
   const [exactSearch, setExactSearch] = useState(true);
   const [maxConcurrentDownloads, setMaxConcurrentDownloads] = useState(6);
@@ -407,12 +403,9 @@ export const UserMenu: React.FC = () => {
     return url.toString();
   };
 
-  // 获取认证信息和存储类型
+  // 获取存储类型
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      const auth = getAuthInfoFromBrowserCookie();
-      setAuthInfo(auth);
-
       const type =
         (window as any).RUNTIME_CONFIG?.STORAGE_TYPE || 'localstorage';
       setStorageType(type);
@@ -848,6 +841,8 @@ export const UserMenu: React.FC = () => {
       });
     } catch (error) {
       console.error('注销请求失败:', error);
+    } finally {
+      clearAuthCookie();
     }
     window.location.href = '/';
   };
@@ -1338,8 +1333,8 @@ export const UserMenu: React.FC = () => {
     setTmdbImageBaseUrl('https://image.tmdb.org');
     setBufferStrategy('medium');
     setNextEpisodePreCache(true);
-    setNextEpisodeDanmakuPreload(true);
-    setDisableAutoLoadDanmaku(false);
+    setNextEpisodeDanmakuPreload(false);
+    setDisableAutoLoadDanmaku(true);
     setHomeBannerEnabled(true);
     setHomeContinueWatchingEnabled(true);
     setHomeModules(defaultHomeModules);
@@ -1363,10 +1358,10 @@ export const UserMenu: React.FC = () => {
       localStorage.setItem('tmdbImageBaseUrl', 'https://image.tmdb.org');
       localStorage.setItem('bufferStrategy', 'medium');
       localStorage.setItem('nextEpisodePreCache', 'true');
-      localStorage.setItem('nextEpisodeDanmakuPreload', 'true');
-      localStorage.setItem('disableAutoLoadDanmaku', 'false');
+      localStorage.setItem('nextEpisodeDanmakuPreload', 'false');
+      localStorage.setItem('disableAutoLoadDanmaku', 'true');
       localStorage.setItem('danmakuMaxCount', '0');
-      localStorage.setItem('danmaku_heatmap_disabled', 'false');
+      localStorage.setItem('danmaku_heatmap_disabled', 'true');
       localStorage.setItem('homeBannerEnabled', 'true');
       localStorage.setItem('homeContinueWatchingEnabled', 'true');
       localStorage.setItem('homeModules', JSON.stringify(defaultHomeModules));
@@ -1416,6 +1411,10 @@ export const UserMenu: React.FC = () => {
   // 检查是否显示修改密码按钮
   const showChangePassword =
     authInfo?.role !== 'owner' && storageType !== 'localstorage';
+
+  const isNormalUser = authInfo?.role === 'user';
+  const canAccessFullSettings = !isNormalUser;
+  const canAccessEcoApps = !isNormalUser;
 
   // 角色中文映射
   const getRoleText = (role?: string) => {
@@ -1592,16 +1591,18 @@ export const UserMenu: React.FC = () => {
           )}
 
           {/* 生态应用按钮 */}
-          <button
-            onClick={() => {
-              setIsOpen(false);
-              setIsEcoAppsOpen(true);
-            }}
-            className='w-full px-3 py-2 text-left flex items-center gap-2.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-sm'
-          >
-            <Package className='w-4 h-4 text-gray-500 dark:text-gray-400' />
-            <span className='font-medium'>生态应用</span>
-          </button>
+          {canAccessEcoApps && (
+            <button
+              onClick={() => {
+                setIsOpen(false);
+                setIsEcoAppsOpen(true);
+              }}
+              className='w-full px-3 py-2 text-left flex items-center gap-2.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-sm'
+            >
+              <Package className='w-4 h-4 text-gray-500 dark:text-gray-400' />
+              <span className='font-medium'>生态应用</span>
+            </button>
+          )}
 
           {/* 分割线 */}
           <div className='my-1 border-t border-gray-200 dark:border-gray-700'></div>
@@ -1684,15 +1685,17 @@ export const UserMenu: React.FC = () => {
           <div className='flex items-center justify-between mb-6'>
             <div className='flex items-center gap-3'>
               <h3 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
-                本地设置
+                {canAccessFullSettings ? '本地设置' : '弹幕设置'}
               </h3>
-              <button
-                onClick={handleResetSettings}
-                className='px-2 py-1 text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 border border-red-200 hover:border-red-300 dark:border-red-800 dark:hover:border-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors'
-                title='重置为默认设置'
-              >
-                恢复默认
-              </button>
+              {canAccessFullSettings && (
+                <button
+                  onClick={handleResetSettings}
+                  className='px-2 py-1 text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 border border-red-200 hover:border-red-300 dark:border-red-800 dark:hover:border-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors'
+                  title='重置为默认设置'
+                >
+                  恢复默认
+                </button>
+              )}
             </div>
             <button
               onClick={handleCloseSettings}
@@ -1705,26 +1708,28 @@ export const UserMenu: React.FC = () => {
 
           {/* 设置项 */}
           <div className='space-y-3 md:space-y-4'>
-            {/* 豆瓣设置 */}
-            <div className='border border-gray-200 dark:border-gray-700 rounded-lg overflow-visible'>
-              <button
-                onClick={() => setIsDoubanSectionOpen(!isDoubanSectionOpen)}
-                className='w-full px-3 py-2.5 md:px-4 md:py-3 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors flex items-center justify-between'
-              >
-                <div className='flex items-center gap-2'>
-                  <Globe className='w-5 h-5 text-gray-600 dark:text-gray-400' />
-                  <h3 className='text-base font-semibold text-gray-800 dark:text-gray-200'>
-                    数据源设置
-                  </h3>
-                </div>
-                {isDoubanSectionOpen ? (
-                  <ChevronUp className='w-5 h-5 text-gray-600 dark:text-gray-400' />
-                ) : (
-                  <ChevronDown className='w-5 h-5 text-gray-600 dark:text-gray-400' />
-                )}
-              </button>
-              {isDoubanSectionOpen && (
-                <div className='p-3 md:p-4 space-y-4 md:space-y-6'>
+            {canAccessFullSettings && (
+              <>
+                {/* 豆瓣设置 */}
+                <div className='border border-gray-200 dark:border-gray-700 rounded-lg overflow-visible'>
+                  <button
+                    onClick={() => setIsDoubanSectionOpen(!isDoubanSectionOpen)}
+                    className='w-full px-3 py-2.5 md:px-4 md:py-3 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors flex items-center justify-between'
+                  >
+                    <div className='flex items-center gap-2'>
+                      <Globe className='w-5 h-5 text-gray-600 dark:text-gray-400' />
+                      <h3 className='text-base font-semibold text-gray-800 dark:text-gray-200'>
+                        数据源设置
+                      </h3>
+                    </div>
+                    {isDoubanSectionOpen ? (
+                      <ChevronUp className='w-5 h-5 text-gray-600 dark:text-gray-400' />
+                    ) : (
+                      <ChevronDown className='w-5 h-5 text-gray-600 dark:text-gray-400' />
+                    )}
+                  </button>
+                  {isDoubanSectionOpen && (
+                    <div className='p-3 md:p-4 space-y-4 md:space-y-6'>
                   {/* 豆瓣数据源选择 */}
                   <div className='space-y-3'>
                     <div>
@@ -2385,30 +2390,30 @@ export const UserMenu: React.FC = () => {
                       </div>
                     </label>
                   </div>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
 
-            {/* 下载设置 */}
-            <div className='border border-gray-200 dark:border-gray-700 rounded-lg overflow-visible'>
-              <button
-                onClick={() => setIsDownloadSectionOpen(!isDownloadSectionOpen)}
-                className='w-full px-3 py-2.5 md:px-4 md:py-3 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors flex items-center justify-between'
-              >
-                <div className='flex items-center gap-2'>
-                  <Download className='w-5 h-5 text-gray-600 dark:text-gray-400' />
-                  <h3 className='text-base font-semibold text-gray-800 dark:text-gray-200'>
-                    下载设置
-                  </h3>
-                </div>
-                {isDownloadSectionOpen ? (
-                  <ChevronUp className='w-5 h-5 text-gray-600 dark:text-gray-400' />
-                ) : (
-                  <ChevronDown className='w-5 h-5 text-gray-600 dark:text-gray-400' />
-                )}
-              </button>
-              {isDownloadSectionOpen && (
-                <div className='p-3 md:p-4 space-y-4 md:space-y-6'>
+                {/* 下载设置 */}
+                <div className='border border-gray-200 dark:border-gray-700 rounded-lg overflow-visible'>
+                  <button
+                    onClick={() => setIsDownloadSectionOpen(!isDownloadSectionOpen)}
+                    className='w-full px-3 py-2.5 md:px-4 md:py-3 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors flex items-center justify-between'
+                  >
+                    <div className='flex items-center gap-2'>
+                      <Download className='w-5 h-5 text-gray-600 dark:text-gray-400' />
+                      <h3 className='text-base font-semibold text-gray-800 dark:text-gray-200'>
+                        下载设置
+                      </h3>
+                    </div>
+                    {isDownloadSectionOpen ? (
+                      <ChevronUp className='w-5 h-5 text-gray-600 dark:text-gray-400' />
+                    ) : (
+                      <ChevronDown className='w-5 h-5 text-gray-600 dark:text-gray-400' />
+                    )}
+                  </button>
+                  {isDownloadSectionOpen && (
+                    <div className='p-3 md:p-4 space-y-4 md:space-y-6'>
                   {/* 最大同时下载限制 */}
                   <div className='space-y-2'>
                     <div>
@@ -2579,30 +2584,30 @@ export const UserMenu: React.FC = () => {
                       下载文件管理
                     </button>
                   </div>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
 
-            {/* 缓冲设置 */}
-            <div className='border border-gray-200 dark:border-gray-700 rounded-lg overflow-visible'>
-              <button
-                onClick={() => setIsBufferSectionOpen(!isBufferSectionOpen)}
-                className='w-full px-3 py-2.5 md:px-4 md:py-3 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors flex items-center justify-between'
-              >
-                <div className='flex items-center gap-2'>
-                  <Gauge className='w-5 h-5 text-gray-600 dark:text-gray-400' />
-                  <h3 className='text-base font-semibold text-gray-800 dark:text-gray-200'>
-                    缓冲设置
-                  </h3>
-                </div>
-                {isBufferSectionOpen ? (
-                  <ChevronUp className='w-5 h-5 text-gray-600 dark:text-gray-400' />
-                ) : (
-                  <ChevronDown className='w-5 h-5 text-gray-600 dark:text-gray-400' />
-                )}
-              </button>
-              {isBufferSectionOpen && (
-                <div className='p-3 md:p-4 space-y-4 md:space-y-6'>
+                {/* 缓冲设置 */}
+                <div className='border border-gray-200 dark:border-gray-700 rounded-lg overflow-visible'>
+                  <button
+                    onClick={() => setIsBufferSectionOpen(!isBufferSectionOpen)}
+                    className='w-full px-3 py-2.5 md:px-4 md:py-3 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors flex items-center justify-between'
+                  >
+                    <div className='flex items-center gap-2'>
+                      <Gauge className='w-5 h-5 text-gray-600 dark:text-gray-400' />
+                      <h3 className='text-base font-semibold text-gray-800 dark:text-gray-200'>
+                        缓冲设置
+                      </h3>
+                    </div>
+                    {isBufferSectionOpen ? (
+                      <ChevronUp className='w-5 h-5 text-gray-600 dark:text-gray-400' />
+                    ) : (
+                      <ChevronDown className='w-5 h-5 text-gray-600 dark:text-gray-400' />
+                    )}
+                  </button>
+                  {isBufferSectionOpen && (
+                    <div className='p-3 md:p-4 space-y-4 md:space-y-6'>
                   <div>
                     <p className='text-xs text-gray-500 dark:text-gray-400'>
                       调整播放器缓冲策略（仅在播放页面生效）
@@ -2689,9 +2694,11 @@ export const UserMenu: React.FC = () => {
                       </div>
                     </label>
                   </div>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              </>
+            )}
 
             {/* 弹幕设置 */}
             <div className='border border-gray-200 dark:border-gray-700 rounded-lg overflow-visible'>
@@ -2889,26 +2896,28 @@ export const UserMenu: React.FC = () => {
               )}
             </div>
 
-            {/* 首页设置 */}
-            <div className='border border-gray-200 dark:border-gray-700 rounded-lg overflow-visible'>
-              <button
-                onClick={() => setIsHomepageSectionOpen(!isHomepageSectionOpen)}
-                className='w-full px-3 py-2.5 md:px-4 md:py-3 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors flex items-center justify-between'
-              >
-                <div className='flex items-center gap-2'>
-                  <Home className='w-5 h-5 text-gray-600 dark:text-gray-400' />
-                  <h3 className='text-base font-semibold text-gray-800 dark:text-gray-200'>
-                    首页设置
-                  </h3>
-                </div>
-                {isHomepageSectionOpen ? (
-                  <ChevronUp className='w-5 h-5 text-gray-600 dark:text-gray-400' />
-                ) : (
-                  <ChevronDown className='w-5 h-5 text-gray-600 dark:text-gray-400' />
-                )}
-              </button>
-              {isHomepageSectionOpen && (
-                <div className='p-3 md:p-4 space-y-4 md:space-y-6'>
+            {canAccessFullSettings ? (
+              <>
+                {/* 首页设置 */}
+                <div className='border border-gray-200 dark:border-gray-700 rounded-lg overflow-visible'>
+                  <button
+                    onClick={() => setIsHomepageSectionOpen(!isHomepageSectionOpen)}
+                    className='w-full px-3 py-2.5 md:px-4 md:py-3 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors flex items-center justify-between'
+                  >
+                    <div className='flex items-center gap-2'>
+                      <Home className='w-5 h-5 text-gray-600 dark:text-gray-400' />
+                      <h3 className='text-base font-semibold text-gray-800 dark:text-gray-200'>
+                        首页设置
+                      </h3>
+                    </div>
+                    {isHomepageSectionOpen ? (
+                      <ChevronUp className='w-5 h-5 text-gray-600 dark:text-gray-400' />
+                    ) : (
+                      <ChevronDown className='w-5 h-5 text-gray-600 dark:text-gray-400' />
+                    )}
+                  </button>
+                  {isHomepageSectionOpen && (
+                    <div className='p-3 md:p-4 space-y-4 md:space-y-6'>
                   <div>
                     <p className='text-xs text-gray-500 dark:text-gray-400 mb-3'>
                       配置首页模块的显示顺序和可见性
@@ -3040,15 +3049,23 @@ export const UserMenu: React.FC = () => {
                   <div className='text-xs text-gray-500 dark:text-gray-400 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg'>
                     <p>💡 提示：点击眼睛图标可显示/隐藏模块，使用箭头按钮调整模块顺序</p>
                   </div>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              </>
+            ) : (
+              <div className='text-xs text-gray-500 dark:text-gray-400 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg'>
+                普通用户仅开放弹幕设置，其他本地设置仅管理员和站长可见。
+              </div>
+            )}
           </div>
 
           {/* 底部说明 */}
           <div className='mt-6 pt-4 border-t border-gray-200 dark:border-gray-700'>
             <p className='text-xs text-gray-500 dark:text-gray-400 text-center'>
-              这些设置保存在本地浏览器中
+              {canAccessFullSettings
+                ? '这些设置保存在本地浏览器中'
+                : '弹幕设置保存在本地浏览器中'}
             </p>
           </div>
         </div>
@@ -4001,7 +4018,8 @@ export const UserMenu: React.FC = () => {
         createPortal(deviceManagementPanel, document.body)}
 
       {/* 使用 Portal 将生态应用面板渲染到 document.body */}
-      {isEcoAppsOpen &&
+      {canAccessEcoApps &&
+        isEcoAppsOpen &&
         mounted &&
         createPortal(ecoAppsPanel, document.body)}
 

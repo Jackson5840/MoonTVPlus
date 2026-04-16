@@ -2,7 +2,8 @@
 
 import { useEffect } from 'react';
 
-import { getAuthInfoFromBrowserCookie, clearAuthCookie } from '@/lib/auth';
+import { clearAuthCookie,getAuthInfoFromBrowserCookie } from '@/lib/auth';
+import { patchClientAuthState } from '@/lib/client-auth';
 import { TOKEN_CONFIG } from '@/lib/refresh-token';
 
 /**
@@ -46,6 +47,11 @@ export function TokenRefreshManager() {
           });
 
           if (response.ok) {
+            const data = await response.json().catch(() => null);
+            patchClientAuthState({
+              authInfo: data?.auth ?? null,
+              loading: false,
+            });
             console.log('[Token] Refreshed successfully');
             return true;
           } else {
@@ -64,9 +70,9 @@ export function TokenRefreshManager() {
                   method: 'POST',
                   credentials: 'include',
                 });
+                clearAuthCookie();
               } catch (error) {
                 console.error('[Token] Logout error:', error);
-                // 登出失败时清除前端cookie
                 clearAuthCookie();
               }
               window.location.href = `/login?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`;
@@ -103,9 +109,9 @@ export function TokenRefreshManager() {
           credentials: 'include',
         }).catch(error => {
           console.error('[Token] Logout error:', error);
-          // 登出失败时清除前端cookie
           clearAuthCookie();
         }).finally(() => {
+          clearAuthCookie();
           window.location.href = `/login?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`;
         });
         return false;
@@ -188,9 +194,9 @@ export function TokenRefreshManager() {
                     method: 'POST',
                     credentials: 'include',
                   });
+                  clearAuthCookie();
                 } catch (error) {
                   console.error('[Token] Logout error:', error);
-                  // 登出失败时清除前端cookie
                   clearAuthCookie();
                 }
                 window.location.href = `/login?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`;

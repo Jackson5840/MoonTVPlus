@@ -50,7 +50,6 @@ export function useWatchRoom(
       const result = await new Promise<{ room: Room; members: Member[] }>((resolve, reject) => {
         sock.emit('room:join', {
           roomId: info.roomId,
-          password: info.password,
           userName: info.userName,
           ownerToken: info.ownerToken, // 发送房主令牌
         }, (response) => {
@@ -143,7 +142,6 @@ export function useWatchRoom(
               roomName: response.room.name,
               isOwner: true,
               userName: data.userName,
-              password: data.password,
               ownerToken: response.room.ownerToken, // 保存房主令牌
               timestamp: Date.now(),
             });
@@ -178,7 +176,6 @@ export function useWatchRoom(
               roomName: response.room.name,
               isOwner: isRoomOwner,
               userName: data.userName,
-              password: data.password,
               ownerToken: isRoomOwner ? (response.room.ownerToken || data.ownerToken) : undefined,
               timestamp: Date.now(),
             });
@@ -215,6 +212,29 @@ export function useWatchRoom(
     return new Promise((resolve) => {
       sock.emit('room:list', (rooms) => {
         resolve(rooms);
+      });
+    });
+  }, []);
+
+  // 刷新当前房间快照和成员列表
+  const refreshCurrentRoom = useCallback(async (): Promise<{
+    room: Room;
+    members: Member[];
+  } | null> => {
+    const sock = watchRoomSocketManager.getSocket();
+    if (!sock || !watchRoomSocketManager.isConnected()) {
+      throw new Error('Not connected');
+    }
+
+    return new Promise((resolve, reject) => {
+      sock.emit('room:snapshot', (response) => {
+        if (response.success && response.room && response.members) {
+          setCurrentRoom(response.room);
+          setMembers(response.members);
+          resolve({ room: response.room, members: response.members });
+        } else {
+          reject(new Error(response.error || '刷新房间失败'));
+        }
       });
     });
   }, []);
@@ -367,6 +387,12 @@ export function useWatchRoom(
       });
     });
 
+    socket.on('room:member-updated', (member) => {
+      setMembers((prev) => prev.map((existing) =>
+        existing.id === member.id ? { ...existing, ...member } : existing
+      ));
+    });
+
     socket.on('room:member-left', (userId) => {
       setMembers((prev) => prev.filter((m) => m.id !== userId));
     });
@@ -384,6 +410,12 @@ export function useWatchRoom(
     });
 
     // 播放事件
+    socket.on('play:timeline', (state) => {
+      if (currentRoom) {
+        setCurrentRoom((prev) => (prev ? { ...prev, currentState: state } : null));
+      }
+    });
+
     socket.on('play:update', (state) => {
       if (currentRoom) {
         setCurrentRoom((prev) => (prev ? { ...prev, currentState: state } : null));
@@ -449,8 +481,10 @@ export function useWatchRoom(
     return () => {
       socket.off('room:joined');
       socket.off('room:member-joined');
+      socket.off('room:member-updated');
       socket.off('room:member-left');
       socket.off('room:deleted');
+      socket.off('play:timeline');
       socket.off('play:update');
       socket.off('play:change');
       socket.off('live:change');
@@ -485,6 +519,7 @@ export function useWatchRoom(
     joinRoom,
     leaveRoom,
     getRoomList,
+    refreshCurrentRoom,
     sendChatMessage,
     updatePlayState,
     seekPlayback,
@@ -500,12 +535,27 @@ export function useWatchRoom(
 
 // 存储房间信息到 localStorage
 function storeRoomInfo(info: StoredRoomInfo) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(info));
+  const storage = getRoomInfoStorage();
+  storage?.setItem(STORAGE_KEY, JSON.stringify(info));
+  // 清理旧版持久化数据，避免继续暴露敏感字段
+  if (typeof window !== 'undefined') {
+    window.localStorage.removeItem(STORAGE_KEY);
+  }
 }
 
 // 获取存储的房间信息
 function getStoredRoomInfo(): StoredRoomInfo | null {
-  const stored = localStorage.getItem(STORAGE_KEY);
+  const storage = getRoomInfoStorage();
+  let stored = storage?.getItem(STORAGE_KEY) || null;
+
+  if (!stored && typeof window !== 'undefined') {
+    const legacy = window.localStorage.getItem(STORAGE_KEY);
+    if (legacy) {
+      stored = legacy;
+      window.localStorage.removeItem(STORAGE_KEY);
+    }
+  }
+
   if (!stored) return null;
 
   try {
@@ -515,6 +565,7 @@ function getStoredRoomInfo(): StoredRoomInfo | null {
       clearStoredRoomInfo();
       return null;
     }
+    storage?.setItem(STORAGE_KEY, JSON.stringify(info));
     return info;
   } catch {
     return null;
@@ -523,5 +574,17 @@ function getStoredRoomInfo(): StoredRoomInfo | null {
 
 // 清除存储的房间信息
 function clearStoredRoomInfo() {
-  localStorage.removeItem(STORAGE_KEY);
+  const storage = getRoomInfoStorage();
+  storage?.removeItem(STORAGE_KEY);
+  if (typeof window !== 'undefined') {
+    window.localStorage.removeItem(STORAGE_KEY);
+  }
+}
+
+function getRoomInfoStorage(): Storage | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  return window.sessionStorage;
 }

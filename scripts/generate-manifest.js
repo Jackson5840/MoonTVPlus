@@ -11,7 +11,7 @@ const publicDir = path.join(projectRoot, 'public');
 const manifestPath = path.join(publicDir, 'manifest.json');
 
 // 从环境变量获取站点名称
-const siteName = process.env.NEXT_PUBLIC_SITE_NAME || 'MoonTVPlus';
+const siteName = process.env.NEXT_PUBLIC_SITE_NAME || 'StarTV';
 
 // manifest.json 模板
 const manifestTemplate = {
